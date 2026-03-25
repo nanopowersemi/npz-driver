@@ -10,7 +10,6 @@
  * Includes
  *****************************************************************************/
 
-#include "main.h"
 #include <stdio.h>
 #include "../Inc/npz_device_control.h"
 
