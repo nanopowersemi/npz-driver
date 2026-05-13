@@ -152,18 +152,12 @@ static bool set_power_switch_control(npz_device_config_s * device_config)
             return false;
     }
 
-    if (device_config->power_switch_gate_boost > 1)
-    {
-        printf("Invalid gate boost value for power switches\r\n");
-        return false;
-    }
 
     pswctl.pswint_p1 = device_config->power_switch_normal_mode_per1; // Peripheral 1
     pswctl.pswint_p2 = device_config->power_switch_normal_mode_per2; // Peripheral 2
     pswctl.pswint_p3 = device_config->power_switch_normal_mode_per3; // Peripheral 3
     pswctl.pswint_p4 = device_config->power_switch_normal_mode_per4; // Peripheral 4
     pswctl.pswh_mode = device_config->host_power_mode;
-    pswctl.psw_en_vn = device_config->power_switch_gate_boost;
     if (npz_write_PSWCTL(pswctl) != OK)
     {
         printf("Failed to write power control register\r\n");

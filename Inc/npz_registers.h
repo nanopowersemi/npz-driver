@@ -93,6 +93,6 @@
 
 #define REG_SRAM_START          0x80 /**< SRAM Base Address Register*/
 #define REG_SRAM_END            0xFF /**< SRAM End Address Register*/
-#define SRAM_REG_SIZE           0x40 /**< SRAM Register Size*/
+#define SRAM_REG_SIZE           0x80 /**< SRAM Register Size*/
 
 #endif /* __NPZ_REGISTERS_H */
