@@ -993,11 +993,6 @@ bool npz_device_handle_adc_external(void)
             printf("Failed to read ADC_EXT register\r\n");
             return false;
         }
-
-        if (get_adc_ext_val.adc_ext == 0x1F)
-        {
-            printf("ADC_IN analog pin not connected. Please connect the pin.\r\n");
-        }
         else
         {
             printf("External ADC channel (connected to ADC_IN) was triggered\r\n");
