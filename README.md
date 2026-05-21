@@ -1,10 +1,6 @@
-<p align="center">
-    <img src="https://dev.nanopowersemi.com/npz.png" alt="nPZero" width="300">
-</p>
-
-The nPZero Driver provides a comprehensive API for interfacing with the nPZero IC. It can be used on any hardware platform to interact with the IC, offering a register-level interface that allows users to efficiently control and manage power-related functionalities in their applications.
+## Overview
+The nPZero Driver API provides a comprehensive API for interfacing with the nPZero IC. It can be used on any hardware platform to interact with the IC, offering a register-level interface that allows users to efficiently control and manage power-related functionalities in their applications.
 The driver also includes a Hardware Abstraction Layer (HAL) for I2C operations, which can be customized to match specific hardware configurations, making it adaptable across various platforms.
-
 
 ## Key Features:
 - **Peripheral Modes**: Full support for communication with sensors connected via I2C and SPI interfaces.
@@ -27,15 +23,10 @@ The driver also includes a Hardware Abstraction Layer (HAL) for I2C operations, 
 - **idle mode**: Use `npz_device_go_to_idle()` to put the device into idle mode.
 
 ## Dependencies
-- **Required Hardware**: The nPZero G1 Development Kit (DevKit) is required to use the nPZero Driver API, and it includes the following components:
-    - nPZero G1 DevBoard
+- **Required Hardware**: The nPZero G1S Development Kit (DevKit) is required to use the nPZero Driver API, and it includes the following components:
+    - nPZero G1S DevBoard
 
 - **Additional MCU Platforms**: The nPZero Driver API can be used with other MCU hardware platforms, such as:
     - nRF52 Development kits
     - ESP DevKits
     - Other MCU platforms with compatible interfaces
-
-
-<p align="center">
-    © Nanopower AS–all rights reserved. For more information, visit <a href="https://nanopowersemi.com" target="_blank">https://nanopowersemi.com</a>
-</p>
