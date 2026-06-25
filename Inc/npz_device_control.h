@@ -65,6 +65,6 @@ void npz_device_configure(npz_device_config_s *device_config);
  *
  * @param [out] int 0->OK, 1->NOK.
  */
-int npz_init(void)
+int npz_init(void);
 
 #endif /* __NPZ_DEVICE_CONTROL_H */
