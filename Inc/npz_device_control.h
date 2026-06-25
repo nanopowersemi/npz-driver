@@ -60,4 +60,11 @@ void npz_device_soft_reset(void);
  */
 void npz_device_configure(npz_device_config_s *device_config);
 
+/**
+ * @brief Function for detecting the nPZero on the I2C bus
+ *
+ * @param [out] int 0->OK, 1->NOK.
+ */
+int npz_init(void)
+
 #endif /* __NPZ_DEVICE_CONTROL_H */

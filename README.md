@@ -18,7 +18,7 @@ The driver also includes a Hardware Abstraction Layer (HAL) for I2C operations, 
   Be sure to check the return values of API functions for error status.
 
 ## API Functions Overview
-- **Initialization**: Call `npz_hal_init()` to initialize the npz interface.
+- **Initialization**: Call `npz_init()` to initialize the npz interface.
 - **Configuration**: Use `npz_device_configure(npz_device_config_s *device_config)` to set up the device configuration.
 - **idle mode**: Use `npz_device_go_to_idle()` to put the device into idle mode.
 

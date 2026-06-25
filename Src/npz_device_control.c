@@ -1155,3 +1155,74 @@ void npz_device_configure(npz_device_config_s * device_config)
         }
     }
 }
+
+static void __G1S_ERRATA_WORKAROUND_11(void)
+{
+	uint8_t rd_data[4];
+    uint32_t _check_;
+    uint8_t _6A_, _65_;
+
+	uint8_t transmitData[2] = {0x6F, 0x60};
+	
+    npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);
+
+    npz_hal_read(NPZ_I2C_ADDRESS, 0x6A, &_6A_, 1, 5);
+
+    if (_6A_ == 0x18) {
+
+		npz_hal_read(NPZ_I2C_ADDRESS, 0x65, &_65_, 1, 5);
+
+		npz_hal_read(NPZ_I2C_ADDRESS, 0x76, &rd_data[0], sizeof(rd_data), 5);
+
+        _check_ = ((uint32_t)rd_data[3] << 24 | (uint32_t)rd_data[2] << 16 | (uint32_t)rd_data[1] << 8 | (uint32_t)rd_data[0]);
+
+    	if ((_check_ < 0x69F54F00) || (_65_ < 0x1A)) {
+            transmitData[0] = 0x65;
+	        transmitData[1] = 0x18;
+            npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);
+        } else {
+            transmitData[0] = 0x65;
+	        transmitData[1] = 0x19;
+            npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);            
+        }
+        transmitData[0] = 0x67;
+	    transmitData[1] = 0x00;
+        npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);        
+    }
+
+    transmitData[0] = 0x6F;
+    transmitData[1] = 0x00;
+    npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);
+}
+
+/**
+ * @brief Function for detecting the nPZero on the I2C bus
+ *
+ * @param [out] int return 0->OK, 1->NOK.
+ */
+int npz_init(void)
+{
+    uint8_t rd_data[4];
+
+    printf("[--- nPZG1S INIT  ");
+
+    npz_hal_init();
+
+    npz_hal_read(NPZ_I2C_ADDRESS, 0x01, &rd_data[0], 3, 5);
+
+    if ((rd_data[2] == 0x00) && (rd_data[1] & 0xE0) == 0)
+    {
+    	__G1S_ERRATA_WORKAROUND_11();
+    }
+
+    if ((rd_data[0]) == 0x60)
+    {
+    	printf("..... OK ---]\r\n");
+    	return 0;
+    }
+    else
+    {
+    	printf("... NOK 0x%x---]\r\n", rd_data[0]);
+    	return 1;
+    }
+}
