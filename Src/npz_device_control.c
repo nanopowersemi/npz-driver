@@ -12,13 +12,17 @@
 
 #include <stdio.h>
 #include "../Inc/npz_device_control.h"
+#include "../Inc/npz_registers.h"
 
 /*****************************************************************************
  * Defines
  *****************************************************************************/
 
-#define SRAM_START 0x80
-#define SRAM_SIZE  128
+#define NPZ_CHIP_ID            0x60 /**< Expected value of the ID register. */
+#define NPZ_ADC_THRESHOLD_MAX  0x1F /**< ADC thresholds are 5-bit. */
+#define NPZ_NCMDP_MAX          0x7F /**< NCMDP is 7-bit. */
+#define NPZ_ADDRP_MAX          0x7F /**< ADDRP is 7-bit. */
+#define NPZ_ERRATA_TIMEOUT_MS  5
 
 /*****************************************************************************
  * Data
@@ -30,6 +34,7 @@ static struct m_adc_ext_code_level_map
     uint16_t millivolts;
 }
 
+/* TODO: {0x30, 3600} is out of sequence (between 2400 and 2700 mV). Verify against the datasheet; 2500 is likely. */
 adc_ext_code_map[] = {{0x00, 600}, {0x08, 700}, {0x0F, 800}, {0x15, 900}, {0x19, 1000},
     {0x1C, 1100}, {0x1F, 1200}, {0x22, 1300}, {0x23, 1400}, {0x24, 1500}, {0x26, 1600},
     {0x28, 1700}, {0x29, 1800}, {0x2A, 1900}, {0x2B, 2000}, {0x2C, 2100}, {0x2D, 2200},
@@ -47,8 +52,8 @@ static struct m_adc_core_code_level_map
 /** Struct that holds the Internal ADC configuration including threshold values. */
 typedef struct
 {
-    npz_register_throva1_s throva1; /**< Struct Internal ADC (VBAT)Threshold Over Value. */
-    npz_register_thruna1_s thruna1; /**< Struct Internal ADC (VBAT)Threshold Under Value. */
+    npz_register_throva1_s throva1; /**< Struct Internal ADC (VBAT) Threshold Over Value. */
+    npz_register_thruna1_s thruna1; /**< Struct Internal ADC (VBAT) Threshold Under Value. */
 } int_adc_channel_config_s;
 
 /** Struct that holds the External ADC configuration including threshold values. */
@@ -61,11 +66,10 @@ typedef struct
 /** Struct that holds all registers that can be configured for each peripheral. */
 typedef struct
 {
-    npz_register_cfgp_s cfgp;   /**< Struct Peripheral Config register. */
-    npz_register_modp_s modp;   /**< Struct Peripheral Mode register. */
-    npz_register_perp_s perp;   /**< Struct Peripheral Polling register. */
-    npz_register_ncmdp_s ncmdp; /**< Struct Peripheral Number of Commands register. */
-    npz_register_sram_s sram_p;
+    npz_register_cfgp_s cfgp;     /**< Struct Peripheral Config register. */
+    npz_register_modp_s modp;     /**< Struct Peripheral Mode register. */
+    npz_register_perp_s perp;     /**< Struct Peripheral Polling register. */
+    npz_register_ncmdp_s ncmdp;   /**< Struct Peripheral Number of Commands register. */
     npz_register_addrp_s addrp;   /**< Struct Peripheral Address register. */
     npz_register_rregp_s rregp;   /**< Struct Peripheral Address of I2C register. */
     npz_register_throvp_s throvp; /**< Struct Peripheral Threshold Over Value. */
@@ -77,7 +81,7 @@ typedef struct
 // Array to hold indices of configured peripherals
 static int m_configured_indices[4] = {-1, -1, -1, -1}; /**< Initialize with invalid indices. */
 static int m_configured_count = 0;                     /**< Count of configured peripherals. */
-static int m_sram_count = 0;                           /**< Count of Bytes writed to SRAM. */
+static uint16_t m_sram_count = 0;                      /**< Count of bytes written to SRAM. Reset per configure. */
 
 /*****************************************************************************
  * Private Methods
@@ -90,6 +94,7 @@ static bool set_global_timeout(npz_device_config_s * device_config)
 {
     npz_register_tout_s time_out_config = {0};
 
+    /* TODO: confirm whether 0 is a valid TOUT value (e.g. "no timeout"). The original behaviour (reject) is kept. */
     if (device_config->global_timeout > 0)
     {
         time_out_config.tout_l = (uint8_t)(device_config->global_timeout & 0xFF); // Lower 8 bits
@@ -116,30 +121,6 @@ static bool set_power_switch_control(npz_device_config_s * device_config)
 {
     npz_register_pswctl_s pswctl = {0};
 
-    if (device_config->power_switch_normal_mode_per1 > 1)
-    {
-        printf("Invalid power switch mode for peripheral 1\r\n");
-        return false;
-    }
-
-    if (device_config->power_switch_normal_mode_per2 > 1)
-    {
-        printf("Invalid power switch mode for peripheral 2\r\n");
-        return false;
-    }
-
-    if (device_config->power_switch_normal_mode_per3 > 1)
-    {
-        printf("Invalid power switch mode for peripheral 3\r\n");
-        return false;
-    }
-
-    if (device_config->power_switch_normal_mode_per4 > 1)
-    {
-        printf("Invalid power switch mode for peripheral 4\r\n");
-        return false;
-    }
-
     switch (device_config->host_power_mode)
     {
         case HOST_POWER_MODE_SWITCH:
@@ -152,12 +133,12 @@ static bool set_power_switch_control(npz_device_config_s * device_config)
             return false;
     }
 
-
     pswctl.pswint_p1 = device_config->power_switch_normal_mode_per1; // Peripheral 1
     pswctl.pswint_p2 = device_config->power_switch_normal_mode_per2; // Peripheral 2
     pswctl.pswint_p3 = device_config->power_switch_normal_mode_per3; // Peripheral 3
     pswctl.pswint_p4 = device_config->power_switch_normal_mode_per4; // Peripheral 4
     pswctl.pswh_mode = device_config->host_power_mode;
+    pswctl.psw_en_vn = device_config->power_switch_gate_boost;       // Was previously never written
     if (npz_write_PSWCTL(pswctl) != OK)
     {
         printf("Failed to write power control register\r\n");
@@ -176,8 +157,11 @@ static bool set_system_config1(npz_device_config_s * device_config)
     syscfg1.wup3 = device_config->wake_up_per3;
     syscfg1.wup4 = device_config->wake_up_per4;
 
-    syscfg1.adc_int_wakeup_enable = device_config->adc_channels[0]->wakeup_enable;
-    syscfg1.adc_ext_wakeup_enable = device_config->adc_channels[1]->wakeup_enable;
+    /* A NULL ADC channel means the channel is not used. */
+    syscfg1.adc_int_wakeup_enable =
+        (device_config->adc_channels[0] != NULL) ? device_config->adc_channels[0]->wakeup_enable : 0;
+    syscfg1.adc_ext_wakeup_enable =
+        (device_config->adc_channels[1] != NULL) ? device_config->adc_channels[1]->wakeup_enable : 0;
     syscfg1.wake_up_any_or_all = device_config->wake_up_any_or_all;
 
     if (npz_write_SYSCFG1(syscfg1) != OK)
@@ -220,27 +204,43 @@ static bool set_system_config2(npz_device_config_s * device_config)
             return false;
     }
 
-    syscfg2.sclk_sel = device_config->system_clock_source;
+    switch (device_config->system_clock_source)
+    {
+        case SYS_CLOCK_10HZ:
+        case SYS_CLOCK_32KHZ:
+            syscfg2.sclk_sel = device_config->system_clock_source;
+            break;
+        default:
+            printf("Invalid system clock source\r\n");
+            return false;
+    }
 
     syscfg2.adc_ext_on = device_config->adc_ext_sampling_enable;
 
     switch (device_config->adc_clock_sel)
     {
         case ADC_CLK_SC:
-            syscfg2.adc_clk_sel = 0; // Disable ADC clock
+            syscfg2.adc_clk_sel = 0; // System clock
             break;
         case ADC_CLK_64:
-            syscfg2.adc_clk_sel = 1; // Enable ADC clock 64 Hz
+            syscfg2.adc_clk_sel = 1; // XO clock 64 Hz
             break;
         case ADC_CLK_256:
-            syscfg2.adc_clk_sel = 2; // Enable ADC clock 256 Hz
+            syscfg2.adc_clk_sel = 2; // XO clock 256 Hz
             break;
         case ADC_CLK_1024:
-            syscfg2.adc_clk_sel = 3; // Enable ADC clock 1024 Hz
+            syscfg2.adc_clk_sel = 3; // XO clock 1024 Hz
             break;
         default:
             printf("Invalid adc clock divider value\r\n");
             return false;
+    }
+
+    /* Register doc: for XO-derived ADC clocks, SCLK_SEL must be set to 1 (crystal oscillator). */
+    if (syscfg2.adc_clk_sel != 0 && syscfg2.sclk_sel != SYS_CLOCK_32KHZ)
+    {
+        printf("XO-derived ADC clock requires system_clock_source = SYS_CLOCK_32KHZ\r\n");
+        return false;
     }
 
     if (npz_write_SYSCFG2(syscfg2) != OK)
@@ -263,6 +263,11 @@ static bool set_system_config3(npz_device_config_s * device_config)
 
     syscfg3.spi_auto = device_config->spi_auto;
 
+    if (device_config->xo_clock_out_sel > XO_CLK_1K)
+    {
+        printf("Invalid CLK_OUT selection\r\n");
+        return false;
+    }
     syscfg3.xo_clkout_div = device_config->xo_clock_out_sel;
 
     if (npz_write_SYSCFG3(syscfg3) != OK)
@@ -273,85 +278,53 @@ static bool set_system_config3(npz_device_config_s * device_config)
     return true;
 }
 
+/** Decodes an npz_int_pin_pull_e into the (pull-up enable, pull-up strength) bit pair. */
+static bool decode_int_pin_pull(npz_int_pin_pull_e pull, uint8_t *pu, uint8_t *pu_s)
+{
+    switch (pull)
+    {
+        case INT_PIN_PULL_DISABLED:
+            *pu = 0;
+            *pu_s = 0;
+            return true;
+        case INT_PIN_PULL_LOW:
+            *pu = 1;
+            *pu_s = 0;
+            return true;
+        case INT_PIN_PULL_HIGH:
+            *pu = 1;
+            *pu_s = 1;
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool set_interrupt_pin_config(npz_device_config_s * device_config)
 {
     npz_register_intcfg_s intcfg = {0};
+    const npz_int_pin_pull_e pulls[4] = {device_config->interrupt_pin_pull_up_pin1,
+        device_config->interrupt_pin_pull_up_pin2, device_config->interrupt_pin_pull_up_pin3,
+        device_config->interrupt_pin_pull_up_pin4};
+    uint8_t pu[4], pu_s[4];
 
-    switch (device_config->interrupt_pin_pull_up_pin1)
+    for (int i = 0; i < 4; i++)
     {
-        case INT_PIN_PULL_DISABLED:
-            intcfg.pu_int1 = 0;
-            intcfg.pu_s_int1 = 0;
-            break;
-        case INT_PIN_PULL_LOW:
-            intcfg.pu_int1 = 1;
-            intcfg.pu_s_int1 = INT_PIN_PULL_LOW >> 1;
-            break;
-        case INT_PIN_PULL_HIGH:
-            intcfg.pu_int1 = 1;
-            intcfg.pu_s_int1 = INT_PIN_PULL_HIGH >> 1;
-            break;
-        default:
-            printf("Invalid interrupt pin 1 value\r\n");
+        if (!decode_int_pin_pull(pulls[i], &pu[i], &pu_s[i]))
+        {
+            printf("Invalid interrupt pin %d value\r\n", i + 1);
             return false;
+        }
     }
 
-    switch (device_config->interrupt_pin_pull_up_pin2)
-    {
-        case INT_PIN_PULL_DISABLED:
-            intcfg.pu_int2 = 0;
-            intcfg.pu_s_int2 = 0;
-            break;
-        case INT_PIN_PULL_LOW:
-            intcfg.pu_int2 = 1;
-            intcfg.pu_s_int2 = INT_PIN_PULL_LOW >> 1;
-            break;
-        case INT_PIN_PULL_HIGH:
-            intcfg.pu_int2 = 1;
-            intcfg.pu_s_int2 = INT_PIN_PULL_HIGH >> 1;
-            break;
-        default:
-            printf("Invalid interrupt pin 2 value\r\n");
-            return false;
-    }
-
-    switch (device_config->interrupt_pin_pull_up_pin3)
-    {
-        case INT_PIN_PULL_DISABLED:
-            intcfg.pu_int3 = 0;
-            intcfg.pu_s_int3 = 0;
-            break;
-        case INT_PIN_PULL_LOW:
-            intcfg.pu_int3 = 1;
-            intcfg.pu_s_int3 = INT_PIN_PULL_LOW >> 1;
-            break;
-        case INT_PIN_PULL_HIGH:
-            intcfg.pu_int3 = 1;
-            intcfg.pu_s_int3 = INT_PIN_PULL_HIGH >> 1;
-            break;
-        default:
-            printf("Invalid interrupt pin 3 value\r\n");
-            return false;
-    }
-
-    switch (device_config->interrupt_pin_pull_up_pin4)
-    {
-        case INT_PIN_PULL_DISABLED:
-            intcfg.pu_int4 = 0;
-            intcfg.pu_s_int4 = 0;
-            break;
-        case INT_PIN_PULL_LOW:
-            intcfg.pu_int4 = 1;
-            intcfg.pu_s_int4 = INT_PIN_PULL_LOW >> 1;
-            break;
-        case INT_PIN_PULL_HIGH:
-            intcfg.pu_int4 = 1;
-            intcfg.pu_s_int4 = INT_PIN_PULL_HIGH >> 1;
-            break;
-        default:
-            printf("Invalid interrupt pin 4 value\r\n");
-            return false;
-    }
+    intcfg.pu_int1 = pu[0];
+    intcfg.pu_s_int1 = pu_s[0];
+    intcfg.pu_int2 = pu[1];
+    intcfg.pu_s_int2 = pu_s[1];
+    intcfg.pu_int3 = pu[2];
+    intcfg.pu_s_int3 = pu_s[2];
+    intcfg.pu_int4 = pu[3];
+    intcfg.pu_s_int4 = pu_s[3];
 
     if (npz_write_INTCFG(intcfg) != OK)
     {
@@ -407,6 +380,13 @@ static bool set_peripheral_mode(npz_device_config_s * device_config,
 static bool set_peripheral_polling_period(npz_device_config_s * device_config,
     peripheral_config_s * peripheral, int index, npz_psw_e switch_id)
 {
+    /* PERP only applies to periodic power mode. For disabled / always-on peripherals it is skipped, so a polling
+     * period of 0 (which the register does not accept) does not make the whole configuration fail. */
+    if (device_config->peripherals[index]->power_mode != POWER_MODE_PERIODIC)
+    {
+        return true;
+    }
+
     peripheral[index].perp.perp_l =
         (uint8_t)(device_config->peripherals[index]->polling_period & 0xFF);
     peripheral[index].perp.perp_h =
@@ -414,111 +394,100 @@ static bool set_peripheral_polling_period(npz_device_config_s * device_config,
 
     if (npz_write_PERP(switch_id, peripheral[index].perp) != OK)
     {
-        printf("Failed to write PERP register for peripheral %d\r\n", index + 1);
+        printf("Failed to write PERP register for peripheral %d (polling period must be > 0)\r\n", index + 1);
         return false;
     }
 
     return true;
 }
 
+/**
+ * @brief Appends bytes to the SRAM at the current fill position (m_sram_count) with bounds checking.
+ */
+static bool sram_append(const uint8_t *data, uint16_t len, int index)
+{
+    if (len == 0)
+    {
+        return true;
+    }
+
+    if (m_sram_count + len > SRAM_REG_SIZE)
+    {
+        printf("No SRAM space available for peripheral %d (%u bytes used, %u requested)\r\n", index + 1,
+            (unsigned) m_sram_count, (unsigned) len);
+        return false;
+    }
+
+    if (npz_write_SRAM_block((uint8_t)(REG_SRAM_START + m_sram_count), data, (uint8_t) len) != OK)
+    {
+        printf("Failed to write SRAM for peripheral %d\r\n", index + 1);
+        return false;
+    }
+
+    m_sram_count += len;
+    return true;
+}
+
 static bool set_peripheral_init_cmds_number(npz_device_config_s * device_config,
     peripheral_config_s * peripheral, int index, npz_psw_e switch_id)
 {
-    uint8_t SRAM_number_bytes_2_write = 0;
+    npz_peripheral_config_s *per = device_config->peripherals[index];
 
-    if (device_config->peripherals[index]->communication_protocol == COM_I2C)
+    if (per->communication_protocol == COM_I2C)
     {
-        peripheral[index].ncmdp.ncmdp = device_config->peripherals[index]->i2c_cfg.command_num;
+        /* Each I2C init command is 2 bytes (register address, value). */
+        uint16_t bytes = (uint16_t)(per->i2c_cfg.command_num * 2u);
 
-        if (m_sram_count <= SRAM_SIZE)
+        if (per->i2c_cfg.command_num > NPZ_NCMDP_MAX || bytes > sizeof(per->i2c_cfg.bytes_from_sram))
         {
-        	SRAM_number_bytes_2_write = device_config->peripherals[index]->i2c_cfg.command_num * 2;
-
-            for (uint8_t i = 0; i < SRAM_number_bytes_2_write; i++)
-            {
-                if (npz_write_SRAM(SRAM_START + m_sram_count,
-                        device_config->peripherals[index]->i2c_cfg.bytes_from_sram[i]) != OK)
-                {
-                    printf("Failed to write SRAM Value for peripheral %d", index + 1);
-                    return false;
-                }
-                else
-                {
-//                    printf(
-//                        "BYTE write SRAM Value for peripheral %d value [%02x] SRAM Addr [%02x] \n\r",
-//                        index + 1,
-//                        device_config->peripherals[index]->i2c_cfg.bytes_from_sram[i],
-//                        SRAM_START + m_sram_count);
-                    m_sram_count++;
-                }
-            }
+            printf("Too many I2C init commands for peripheral %d (max %u)\r\n", index + 1,
+                (unsigned)(sizeof(per->i2c_cfg.bytes_from_sram) / 2));
+            return false;
         }
-        else
+
+        peripheral[index].ncmdp.ncmdp = per->i2c_cfg.command_num;
+
+        if (!sram_append(per->i2c_cfg.bytes_from_sram, bytes, index))
         {
-            printf("No SRAM space available for peripheral %d \n\r", index + 1);
+            return false;
         }
     }
-    else if (device_config->peripherals[index]->communication_protocol == COM_SPI)
+    else if (per->communication_protocol == COM_SPI)
     {
-    	peripheral[index].ncmdp.ncmdp = device_config->peripherals[index]->spi_cfg.bytes_from_sram_num;
+        uint8_t init_bytes = per->spi_cfg.bytes_from_sram_num;
+        uint8_t read_bytes = per->spi_cfg.bytes_from_sram_read_num;
 
-    	if (m_sram_count <= SRAM_SIZE)
+        if (init_bytes > NPZ_NCMDP_MAX || init_bytes > sizeof(per->spi_cfg.bytes_from_sram))
         {
-        	SRAM_number_bytes_2_write = device_config->peripherals[index]->i2c_cfg.command_num;
-
-            for (uint8_t i = 0; i < SRAM_number_bytes_2_write; i++)
-            {
-                if (npz_write_SRAM(SRAM_START + m_sram_count,
-                        device_config->peripherals[index]->spi_cfg.bytes_from_sram[i]) != OK)
-                {
-                    printf("Failed to write SRAM Value for peripheral %d", index + 1);
-                    return false;
-                }
-                else
-                {
-//                    printf(
-//                        "BYTE write SRAM Value for peripheral %d value [%02x] SRAM Addr [%02x] \n\r",
-//                        index + 1,
-//                        device_config->peripherals[index]->spi_cfg.bytes_from_sram[i],
-//                        SRAM_START + m_sram_count);
-                    m_sram_count++;
-                }
-            }
-        }
-        else
-        {
-            printf("No SRAM space available for peripheral %d \n\r", index + 1);
+            printf("Too many SPI init bytes for peripheral %d (max %u)\r\n", index + 1,
+                (unsigned) sizeof(per->spi_cfg.bytes_from_sram));
+            return false;
         }
 
-        if (device_config->peripherals[index]->spi_cfg.bytes_from_sram_read_num > 0)
+        if (read_bytes > NPZ_ADDRP_MAX || read_bytes > sizeof(per->spi_cfg.bytes_from_sram_read))
         {
-        	SRAM_number_bytes_2_write = device_config->peripherals[index]->spi_cfg.bytes_from_sram_read_num;
-            for (uint8_t i = 0; i < SRAM_number_bytes_2_write; i++)
-             {
-                 if (npz_write_SRAM(SRAM_START + m_sram_count,
-                         device_config->peripherals[index]->spi_cfg.bytes_from_sram_read[i]) != OK)
-                 {
-                     printf("Failed to write SRAM Value for peripheral %d", index + 1);
-                     return false;
-                 }
-                 else
-                 {
-//                     printf(
-//                         "BYTE write SRAM Value for peripheral %d value [%02x] SRAM Addr [%02x] \n\r",
-//                         index + 1,
-//                         device_config->peripherals[index]->spi_cfg.bytes_from_sram_read[i],
-//                         SRAM_START + m_sram_count);
-                     m_sram_count++;
-                 }
-             }
-
-        }
-        else
-        {
-            printf("No SRAM space available for peripheral %d \n\r", index + 1);
+            printf("Too many SPI read bytes for peripheral %d (max %u)\r\n", index + 1,
+                (unsigned) sizeof(per->spi_cfg.bytes_from_sram_read));
+            return false;
         }
 
+        peripheral[index].ncmdp.ncmdp = init_bytes;
 
+        /* Previously this used i2c_cfg.command_num (wrong union member). */
+        if (!sram_append(per->spi_cfg.bytes_from_sram, init_bytes, index))
+        {
+            return false;
+        }
+
+        if (!sram_append(per->spi_cfg.bytes_from_sram_read, read_bytes, index))
+        {
+            return false;
+        }
+    }
+    else
+    {
+        printf("Invalid communication protocol for peripheral %d\r\n", index + 1);
+        return false;
     }
 
     if (npz_write_NCMDP(switch_id, peripheral[index].ncmdp) != OK)
@@ -535,6 +504,11 @@ static bool set_peripheral_address(npz_device_config_s * device_config,
 {
     if (device_config->peripherals[index]->communication_protocol == COM_I2C)
     {
+        if (device_config->peripherals[index]->i2c_cfg.sensor_address > NPZ_ADDRP_MAX)
+        {
+            printf("Invalid 7-bit I2C address for peripheral %d\r\n", index + 1);
+            return false;
+        }
         peripheral[index].addrp.addrp =
             device_config->peripherals[index]->i2c_cfg.sensor_address;
     }
@@ -617,11 +591,11 @@ static bool set_peripheral_time_to_wait_config(npz_device_config_s * device_conf
             break;
         case PRE_WAIT_TIME_EXTEND_256:
             peripheral[index].tcfgp.twt_en = 1;
-            peripheral[index].tcfgp.twt_ext = PRE_WAIT_TIME_EXTEND_256 >> 1;
+            peripheral[index].tcfgp.twt_ext = 0;
             break;
         case PRE_WAIT_TIME_EXTEND_4096:
             peripheral[index].tcfgp.twt_en = 1;
-            peripheral[index].tcfgp.twt_ext = PRE_WAIT_TIME_EXTEND_4096 >> 1;
+            peripheral[index].tcfgp.twt_ext = 1;
             break;
         default:
             printf("Invalid pre-initialization wait time\r\n");
@@ -794,32 +768,37 @@ static bool configure_peripherals(npz_device_config_s * device_config)
     return true;
 }
 
+static bool adc_thresholds_valid(const npz_adc_config_channels_s *channel)
+{
+    /* Thresholds are 5-bit; 0 is a valid value (the original code rejected it). */
+    return (channel->over_threshold <= NPZ_ADC_THRESHOLD_MAX) &&
+           (channel->under_threshold <= NPZ_ADC_THRESHOLD_MAX);
+}
+
 static bool configure_internal_adc(npz_device_config_s * device_config)
 {
     int_adc_channel_config_s adc_channel = {0};
+    const npz_adc_config_channels_s *channel = device_config->adc_channels[0];
 
-    if (device_config->adc_channels[0]->over_threshold > 0 &&
-        device_config->adc_channels[0]->under_threshold > 0)
+    if (!adc_thresholds_valid(channel))
     {
-        // Set Internal ADC over threshold Value
-        adc_channel.throva1.throva = device_config->adc_channels[0]->over_threshold;
-        if (npz_write_THROVA1(adc_channel.throva1) != OK)
-        {
-            printf("Failed to write THROVA1 register for internal ADC\r\n");
-            return false;
-        }
-
-        // Set Internal ADC under threshold value
-        adc_channel.thruna1.thruna = device_config->adc_channels[0]->under_threshold;
-        if (npz_write_THRUNA1(adc_channel.thruna1) != OK)
-        {
-            printf("Failed to write THRUNA1 register for internal ADC\r\n");
-            return false;
-        }
+        printf("Invalid internal ADC thresholds (max %d)\r\n", NPZ_ADC_THRESHOLD_MAX);
+        return false;
     }
-    else
+
+    // Set Internal ADC over threshold Value
+    adc_channel.throva1.throva = channel->over_threshold;
+    if (npz_write_THROVA1(adc_channel.throva1) != OK)
     {
-        printf("Failed to configure internal ADC\r\n");
+        printf("Failed to write THROVA1 register for internal ADC\r\n");
+        return false;
+    }
+
+    // Set Internal ADC under threshold value
+    adc_channel.thruna1.thruna = channel->under_threshold;
+    if (npz_write_THRUNA1(adc_channel.thruna1) != OK)
+    {
+        printf("Failed to write THRUNA1 register for internal ADC\r\n");
         return false;
     }
 
@@ -829,29 +808,27 @@ static bool configure_internal_adc(npz_device_config_s * device_config)
 static bool configure_external_adc(npz_device_config_s * device_config)
 {
     ext_adc_channel_config_s adc_channel = {0};
+    const npz_adc_config_channels_s *channel = device_config->adc_channels[1];
 
-    if (device_config->adc_channels[1]->over_threshold > 0 &&
-        device_config->adc_channels[1]->under_threshold > 0)
+    if (!adc_thresholds_valid(channel))
     {
-        // Set External ADC over threshold Value
-        adc_channel.throva2.throva = device_config->adc_channels[1]->over_threshold;
-        if (npz_write_THROVA2(adc_channel.throva2) != OK)
-        {
-            printf("Failed to write THROVA2 register for external ADC\r\n");
-            return false;
-        }
-
-        // Set External ADC under threshold value
-        adc_channel.thruna2.thruna = device_config->adc_channels[1]->under_threshold;
-        if (npz_write_THRUNA2(adc_channel.thruna2) != OK)
-        {
-            printf("Failed to write THRUNA2 register for external ADC\r\n");
-            return false;
-        }
+        printf("Invalid external ADC thresholds (max %d)\r\n", NPZ_ADC_THRESHOLD_MAX);
+        return false;
     }
-    else
+
+    // Set External ADC over threshold Value
+    adc_channel.throva2.throva = channel->over_threshold;
+    if (npz_write_THROVA2(adc_channel.throva2) != OK)
     {
-        printf("Failed to configure external ADC\r\n");
+        printf("Failed to write THROVA2 register for external ADC\r\n");
+        return false;
+    }
+
+    // Set External ADC under threshold value
+    adc_channel.thruna2.thruna = channel->under_threshold;
+    if (npz_write_THRUNA2(adc_channel.thruna2) != OK)
+    {
+        printf("Failed to write THRUNA2 register for external ADC\r\n");
         return false;
     }
 
@@ -902,14 +879,12 @@ static bool configure_global_settings(npz_device_config_s * device_config)
         return false;
     }
 
-
     return true;
 }
 
 static bool adc_ext_code_to_voltage(uint8_t code)
 {
     int n;
-    bool code_found = false;
     int n_max = sizeof(adc_ext_code_map) / sizeof(struct m_adc_ext_code_level_map);
 
     for (n = 0; n < n_max; n++)
@@ -917,26 +892,19 @@ static bool adc_ext_code_to_voltage(uint8_t code)
         if (adc_ext_code_map[n].code == code)
         {
             printf("Reading value from adc channel is 0x%02X corresponds to an input voltage "
-                         "of %d.%03d V \r\n",
+                   "of %d.%03d V \r\n",
                 code, adc_ext_code_map[n].millivolts / 1000, adc_ext_code_map[n].millivolts % 1000);
-            code_found = true;
-            break;
+            return true;
         }
     }
 
-    if (!code_found)
-    {
-        printf("ADC reading value 0x%02X does not match any expected code \r\n", code);
-        return false;
-    }
-
-    return true;
+    printf("ADC reading value 0x%02X does not match any expected code \r\n", code);
+    return false;
 }
 
 static bool adc_core_code_to_voltage(uint8_t code)
 {
     int n;
-    bool code_found = false;
     int n_max = sizeof(adc_core_code_map) / sizeof(struct m_adc_core_code_level_map);
 
     for (n = 0; n < n_max; n++)
@@ -944,21 +912,78 @@ static bool adc_core_code_to_voltage(uint8_t code)
         if (adc_core_code_map[n].code == code)
         {
             printf("Reading value from adc channel is 0x%02X corresponds to an input voltage "
-                         "of %d.%03d V \r\n",
+                   "of %d.%03d V \r\n",
                 code, adc_core_code_map[n].millivolts / 1000,
                 adc_core_code_map[n].millivolts % 1000);
-            code_found = true;
-            break;
+            return true;
         }
     }
 
-    if (!code_found)
+    printf("ADC reading value 0x%02X does not match any expected code \r\n", code);
+    return false;
+}
+
+/**
+ * @brief Errata 11 workaround for nPZero G1S.
+ *
+ * Accesses undocumented registers; only call after the chip ID has been verified. All I2C accesses are checked so
+ * that no decision is taken on uninitialized data.
+ */
+static bool g1s_errata_workaround_11(void)
+{
+    uint8_t rd_data[4] = {0};
+    uint32_t check;
+    uint8_t reg_6a = 0, reg_65 = 0;
+    bool ok = true;
+
+    uint8_t transmitData[2] = {0x6F, 0x60};
+
+    if (npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), NPZ_ERRATA_TIMEOUT_MS) != OK)
     {
-        printf("ADC reading value 0x%02X does not match any expected code \r\n", code);
         return false;
     }
 
-    return true;
+    if (npz_hal_read(NPZ_I2C_ADDRESS, 0x6A, &reg_6a, 1, NPZ_ERRATA_TIMEOUT_MS) != OK)
+    {
+        ok = false;
+    }
+    else if (reg_6a == 0x18)
+    {
+        if (npz_hal_read(NPZ_I2C_ADDRESS, 0x65, &reg_65, 1, NPZ_ERRATA_TIMEOUT_MS) != OK ||
+            npz_hal_read(NPZ_I2C_ADDRESS, 0x76, &rd_data[0], sizeof(rd_data), NPZ_ERRATA_TIMEOUT_MS) != OK)
+        {
+            ok = false;
+        }
+        else
+        {
+            check = ((uint32_t)rd_data[3] << 24 | (uint32_t)rd_data[2] << 16 | (uint32_t)rd_data[1] << 8 |
+                     (uint32_t)rd_data[0]);
+
+            transmitData[0] = 0x65;
+            transmitData[1] = ((check < 0x69F54F00) || (reg_65 < 0x1A)) ? 0x18 : 0x19;
+            if (npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), NPZ_ERRATA_TIMEOUT_MS) != OK)
+            {
+                ok = false;
+            }
+
+            transmitData[0] = 0x67;
+            transmitData[1] = 0x00;
+            if (npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), NPZ_ERRATA_TIMEOUT_MS) != OK)
+            {
+                ok = false;
+            }
+        }
+    }
+
+    /* Always try to leave the 0x6F access mode, even after a failure. */
+    transmitData[0] = 0x6F;
+    transmitData[1] = 0x00;
+    if (npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), NPZ_ERRATA_TIMEOUT_MS) != OK)
+    {
+        ok = false;
+    }
+
+    return ok;
 }
 
 
@@ -974,14 +999,12 @@ bool npz_device_handle_adc_external(void)
 
     if (npz_read_SYSCFG1(&syscfg1) != OK)
     {
-
         printf("Failed to read SYSCFG1 register\r\n");
         return false;
     }
 
     if (npz_read_SYSCFG2(&syscfg2) != OK)
     {
-
         printf("Failed to read SYSCFG2 register\r\n");
         return false;
     }
@@ -993,14 +1016,11 @@ bool npz_device_handle_adc_external(void)
             printf("Failed to read ADC_EXT register\r\n");
             return false;
         }
-        else
+
+        printf("External ADC channel (connected to ADC_IN) was triggered\r\n");
+        if (!adc_ext_code_to_voltage(get_adc_ext_val.adc_ext))
         {
-            printf("External ADC channel (connected to ADC_IN) was triggered\r\n");
-            bool adc_ext = adc_ext_code_to_voltage(get_adc_ext_val.adc_ext);
-            if (!adc_ext)
-            {
-                return false;
-            }
+            return false;
         }
     }
 
@@ -1018,21 +1038,26 @@ bool npz_device_handle_adc_internal(void)
         return false;
     }
 
-    bool adc_core = adc_core_code_to_voltage(get_adc_core_val.adc_core);
-    if (!adc_core)
-    {
-        return false;
-    }
-
-    return true;
+    return adc_core_code_to_voltage(get_adc_core_val.adc_core);
 }
 
 
 bool npz_device_read_peripheral_value(npz_psw_e psw_lp, int index, int * peripheral_value)
 {
     npz_register_cfgp_s cfgp = {0};
+    npz_register_modp_s modp = {0};
     npz_register_valp_s valp = {0};
     npz_register_addrp_s addrp = {0};
+    uint16_t raw;
+
+    (void) index; /* Unused, kept for API compatibility. */
+
+    if (peripheral_value == NULL)
+    {
+        return false;
+    }
+
+    *peripheral_value = 0;
 
     printf("External Trigger from Peripheral %d\r\n", psw_lp);
 
@@ -1053,26 +1078,36 @@ bool npz_device_read_peripheral_value(npz_psw_e psw_lp, int index, int * periphe
             return false;
         }
 
+        if (npz_read_MODP(psw_lp, &modp) != OK)
+        {
+            printf("Failed to read MODP register for peripheral %d\r\n", psw_lp);
+            return false;
+        }
+
         if (npz_read_ADDRP(psw_lp, &addrp) != OK)
         {
             printf("Failed to read ADDRP register for peripheral %d\r\n", psw_lp);
             return false;
         }
 
-        if (addrp.spi_en == 0) // I2C communication protocol
-        {
-            *peripheral_value = (valp.valp_h << 8) | valp.valp_l;
+        raw = (uint16_t)((valp.valp_h << 8) | valp.valp_l);
 
-            printf("Reading value from I2C Peripheral %d is 0x%02X 0x%02X\r\n", psw_lp,
-                valp.valp_h, valp.valp_l);
-        }
-        else // SPI communication protocol
+        switch (modp.dtype)
         {
-            *peripheral_value = (valp.valp_h << 8) | valp.valp_l;
-
-            printf("Reading value from SPI Peripheral %d is 0x%02X 0x%02X\r\n", psw_lp,
-                valp.valp_h, valp.valp_l);
+            case DATA_TYPE_UINT8:
+                *peripheral_value = valp.valp_l;
+                break;
+            case DATA_TYPE_INT16:
+                *peripheral_value = (int16_t) raw;
+                break;
+            case DATA_TYPE_UINT16:
+            default:
+                *peripheral_value = raw;
+                break;
         }
+
+        printf("Reading value from %s Peripheral %d is 0x%02X 0x%02X (%d)\r\n",
+            (addrp.spi_en == 0) ? "I2C" : "SPI", psw_lp, valp.valp_h, valp.valp_l, *peripheral_value);
     }
 
     return true;
@@ -1109,20 +1144,29 @@ void npz_device_soft_reset(void)
 /**
  * @brief Modify device configuration.
  */
-void npz_device_configure(npz_device_config_s * device_config)
+bool npz_device_configure(npz_device_config_s * device_config)
 {
+    const npz_adc_config_channels_s *adc_int;
+    const npz_adc_config_channels_s *adc_ext;
+
     // Ensure the device_config is not NULL
     if (device_config == NULL)
     {
         printf("Invalid device configuration pointer\r\n");
-        return;
+        return false;
     }
+
+    adc_int = device_config->adc_channels[0];
+    adc_ext = device_config->adc_channels[1];
+
+    /* SRAM is filled from the start on every call (previously it kept appending on repeated calls). */
+    m_sram_count = 0;
 
     // Configure global settings
     if (!configure_global_settings(device_config))
     {
         printf("Failed to configure global settings\r\n");
-        return;
+        return false;
     }
 
     // Validate peripherals
@@ -1132,97 +1176,71 @@ void npz_device_configure(npz_device_config_s * device_config)
         if (!configure_peripherals(device_config))
         {
             printf("Failed to configure peripherals\r\n");
-            return;
+            return false;
         }
     }
 
-    if (device_config->adc_channels[0]->wakeup_enable == 1)
+    if (adc_int != NULL && adc_int->wakeup_enable == 1)
     {
         if (!configure_internal_adc(device_config))
         {
             printf("Failed to configure internal ADC\r\n");
-            return;
+            return false;
         }
     }
 
-    if (device_config->adc_channels[1]->wakeup_enable == 1 &&
-        device_config->adc_ext_sampling_enable == 1)
+    if (adc_ext != NULL && adc_ext->wakeup_enable == 1 && device_config->adc_ext_sampling_enable == 1)
     {
         if (!configure_external_adc(device_config))
         {
             printf("Failed to configure external ADC\r\n");
-            return;
+            return false;
         }
     }
-}
 
-static void __G1S_ERRATA_WORKAROUND_11(void)
-{
-	uint8_t rd_data[4];
-    uint32_t _check_;
-    uint8_t _6A_, _65_;
-
-	uint8_t transmitData[2] = {0x6F, 0x60};
-	
-    npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);
-
-    npz_hal_read(NPZ_I2C_ADDRESS, 0x6A, &_6A_, 1, 5);
-
-    if (_6A_ == 0x18) {
-
-		npz_hal_read(NPZ_I2C_ADDRESS, 0x65, &_65_, 1, 5);
-
-		npz_hal_read(NPZ_I2C_ADDRESS, 0x76, &rd_data[0], sizeof(rd_data), 5);
-
-        _check_ = ((uint32_t)rd_data[3] << 24 | (uint32_t)rd_data[2] << 16 | (uint32_t)rd_data[1] << 8 | (uint32_t)rd_data[0]);
-
-    	if ((_check_ < 0x69F54F00) || (_65_ < 0x1A)) {
-            transmitData[0] = 0x65;
-	        transmitData[1] = 0x18;
-            npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);
-        } else {
-            transmitData[0] = 0x65;
-	        transmitData[1] = 0x19;
-            npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);            
-        }
-        transmitData[0] = 0x67;
-	    transmitData[1] = 0x00;
-        npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);        
-    }
-
-    transmitData[0] = 0x6F;
-    transmitData[1] = 0x00;
-    npz_hal_write(NPZ_I2C_ADDRESS, transmitData, sizeof(transmitData), 5);
+    return true;
 }
 
 /**
  * @brief Function for detecting the nPZero on the I2C bus
  *
- * @param [out] int return 0->OK, 1->NOK.
+ * @return 0 if the nPZero was detected, 1 otherwise.
  */
 int npz_init(void)
 {
-    uint8_t rd_data[4];
+    uint8_t rd_data[3] = {0};
 
     printf("[--- nPZG1S INIT  ");
 
-    npz_hal_init();
+    if (npz_hal_init() != OK)
+    {
+        printf("... NOK (HAL init failed) ---]\r\n");
+        return 1;
+    }
 
-    npz_hal_read(NPZ_I2C_ADDRESS, 0x01, &rd_data[0], 3, 5);
+    /* Reads ID, STA1 and STA2 in one transfer. */
+    if (npz_hal_read(NPZ_I2C_ADDRESS, REG_ID, &rd_data[0], sizeof(rd_data), NPZ_ERRATA_TIMEOUT_MS) != OK)
+    {
+        printf("... NOK (I2C read failed) ---]\r\n");
+        return 1;
+    }
+
+    /* Verify the chip ID before touching any undocumented registers. */
+    if (rd_data[0] != NPZ_CHIP_ID)
+    {
+        printf("... NOK 0x%x---]\r\n", rd_data[0]);
+        return 1;
+    }
 
     if ((rd_data[2] == 0x00) && (rd_data[1] & 0xE0) == 0)
     {
-    	__G1S_ERRATA_WORKAROUND_11();
+        if (!g1s_errata_workaround_11())
+        {
+            printf("... NOK (errata 11 workaround failed) ---]\r\n");
+            return 1;
+        }
     }
 
-    if ((rd_data[0]) == 0x60)
-    {
-    	printf("..... OK ---]\r\n");
-    	return 0;
-    }
-    else
-    {
-    	printf("... NOK 0x%x---]\r\n", rd_data[0]);
-    	return 1;
-    }
+    printf("..... OK ---]\r\n");
+    return 0;
 }

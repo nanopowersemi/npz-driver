@@ -37,8 +37,8 @@ typedef struct
 
 static const register_info_t global_register_info[] = {
     {REG_IDLE_RST, "IDLE_RST"}, {REG_ID, "ID"},           {REG_PSWCTL, "PSWCTL"},
-	{REG_SYSCFG1, "SYSCFG1"},     {REG_SYSCFG2, "SYSCFG2"},     {REG_SYSCFG3, "SYSCFG3"},
-    {REG_TOUT_L, "TOUT_L"},     {REG_TOUT_H, "TOUT_H"},       {REG_INTCFG, "INTCFG"}
+    {REG_SYSCFG1, "SYSCFG1"},   {REG_SYSCFG2, "SYSCFG2"}, {REG_SYSCFG3, "SYSCFG3"},
+    {REG_TOUT_L, "TOUT_L"},     {REG_TOUT_H, "TOUT_H"},   {REG_INTCFG, "INTCFG"}
 };
 
 
@@ -78,7 +78,7 @@ static const register_info_t peripheral_registers[][13] = {
  * Private Methods
  *****************************************************************************/
 
-// Function to convert a byte to a binary string (replace with your actual implementation)
+// Convert a byte to an 8-character binary string
 static char *char_to_binary_string(uint8_t byte, char *buffer)
 {
     for (int i = 7; i >= 0; i--)
@@ -89,35 +89,15 @@ static char *char_to_binary_string(uint8_t byte, char *buffer)
     return buffer;
 }
 
-
-static void log_register_data(const char *register_name, uint8_t register_address, uint8_t *values, int count)
+/* Logs one single-byte register. All register structs are exactly 1 byte (checked in npz.h). */
+static void log_register_data(const char *register_name, uint8_t register_address, const void *value)
 {
-    char binary_str[9];         // Buffer to hold binary strings for each register value
-    char combined_bin[17] = ""; // Buffer to hold combined binary strings for display, limited to 16 bits
-    char combined_hex[7] = "";  // Buffer to hold 4-character hex strings for display with "0x" prefix
+    char binary_str[9];
+    uint8_t byte = *(const uint8_t *) value;
 
-    // Combine binary values in little-endian order (LSB first) and hex representation
-    for (int i = 0; i < count && i < 2; i++)
-    { // Limit to 2 bytes for 16-bit display
-        char_to_binary_string(values[i], binary_str);
-        strcat(combined_bin, binary_str);
-    }
+    char_to_binary_string(byte, binary_str);
 
-    // Format HEX output as 4 characters long with "0x" prefix, showing LSB first
-
-    if (count == 1)
-    {
-        sprintf(combined_hex, "0x%02X ", values[0]); // Pad with 00 if only one byte
-    }
-    else
-    {
-        sprintf(combined_hex, "0x00 "); // Pad with 0000 if no bytes
-    }
-
-    combined_bin[16] = '\0'; // Ensure the binary string is exactly 16 bits
-
-    // Print the register data in the specified format with proper alignment
-    printf("[  %02X   | %-14s | %-10s | %-4s ] \r\n", register_address, register_name, combined_bin, combined_hex);
+    printf("[  %02X   | %-14s | %-10s | 0x%02X ] \r\n", register_address, register_name, binary_str, byte);
 }
 
 static bool read_peripherals(npz_device_config_s *device_config)
@@ -146,8 +126,7 @@ static bool read_peripherals(npz_device_config_s *device_config)
         // Read and log CFGP register
         if (npz_read_CFGP(switches[i], &cfgp) == OK)
         {
-            log_register_data(peripheral_registers[i][0].reg_name, peripheral_registers[i][0].reg_address,
-                              (uint8_t *) &cfgp, sizeof(cfgp));
+            log_register_data(peripheral_registers[i][0].reg_name, peripheral_registers[i][0].reg_address, &cfgp);
         }
         else
         {
@@ -158,8 +137,7 @@ static bool read_peripherals(npz_device_config_s *device_config)
         // Read and log MODP register
         if (npz_read_MODP(switches[i], &modp) == OK)
         {
-            log_register_data(peripheral_registers[i][1].reg_name, peripheral_registers[i][1].reg_address,
-                              (uint8_t *) &modp, sizeof(modp));
+            log_register_data(peripheral_registers[i][1].reg_name, peripheral_registers[i][1].reg_address, &modp);
         }
         else
         {
@@ -170,10 +148,8 @@ static bool read_peripherals(npz_device_config_s *device_config)
         // Read and log PERP register (split into low and high bytes)
         if (npz_read_PERP(switches[i], &perp) == OK)
         {
-            log_register_data(peripheral_registers[i][2].reg_name, peripheral_registers[i][2].reg_address,
-                              (uint8_t *) &perp.perp_l, 1);
-            log_register_data(peripheral_registers[i][3].reg_name, peripheral_registers[i][3].reg_address,
-                              (uint8_t *) &perp.perp_h, 1);
+            log_register_data(peripheral_registers[i][2].reg_name, peripheral_registers[i][2].reg_address, &perp.perp_l);
+            log_register_data(peripheral_registers[i][3].reg_name, peripheral_registers[i][3].reg_address, &perp.perp_h);
         }
         else
         {
@@ -184,8 +160,7 @@ static bool read_peripherals(npz_device_config_s *device_config)
         // Read and log NCMDP register
         if (npz_read_NCMDP(switches[i], &ncmdp) == OK)
         {
-            log_register_data(peripheral_registers[i][4].reg_name, peripheral_registers[i][4].reg_address,
-                              (uint8_t *) &ncmdp, sizeof(ncmdp));
+            log_register_data(peripheral_registers[i][4].reg_name, peripheral_registers[i][4].reg_address, &ncmdp);
         }
         else
         {
@@ -202,8 +177,7 @@ static bool read_peripherals(npz_device_config_s *device_config)
             // Read and log ADDRP register
             if (npz_read_ADDRP(switches[i], &addrp) == OK)
             {
-                log_register_data(peripheral_registers[i][5].reg_name, peripheral_registers[i][5].reg_address,
-                                  (uint8_t *) &addrp, sizeof(addrp));
+                log_register_data(peripheral_registers[i][5].reg_name, peripheral_registers[i][5].reg_address, &addrp);
             }
             else
             {
@@ -222,8 +196,7 @@ static bool read_peripherals(npz_device_config_s *device_config)
             // Read and log RREGP register
             if (npz_read_RREGP(switches[i], &rregp) == OK)
             {
-                log_register_data(peripheral_registers[i][6].reg_name, peripheral_registers[i][6].reg_address,
-                                  (uint8_t *) &rregp, sizeof(rregp));
+                log_register_data(peripheral_registers[i][6].reg_name, peripheral_registers[i][6].reg_address, &rregp);
             }
             else
             {
@@ -235,9 +208,9 @@ static bool read_peripherals(npz_device_config_s *device_config)
             if (npz_read_THRUNP(switches[i], &thrunp) == OK)
             {
                 log_register_data(peripheral_registers[i][7].reg_name, peripheral_registers[i][7].reg_address,
-                                  (uint8_t *) &thrunp.thrunp_l, 1);
+                                  &thrunp.thrunp_l);
                 log_register_data(peripheral_registers[i][8].reg_name, peripheral_registers[i][8].reg_address,
-                                  (uint8_t *) &thrunp.thrunp_h, 1);
+                                  &thrunp.thrunp_h);
             }
             else
             {
@@ -249,9 +222,9 @@ static bool read_peripherals(npz_device_config_s *device_config)
             if (npz_read_THROVP(switches[i], &throvp) == OK)
             {
                 log_register_data(peripheral_registers[i][9].reg_name, peripheral_registers[i][9].reg_address,
-                                  (uint8_t *) &throvp.throvp_l, 1);
+                                  &throvp.throvp_l);
                 log_register_data(peripheral_registers[i][10].reg_name, peripheral_registers[i][10].reg_address,
-                                  (uint8_t *) &throvp.throvp_h, 1);
+                                  &throvp.throvp_h);
             }
             else
             {
@@ -263,8 +236,7 @@ static bool read_peripherals(npz_device_config_s *device_config)
         // Read and log TWTP register
         if (npz_read_TWTP(switches[i], &twtp) == OK)
         {
-            log_register_data(peripheral_registers[i][11].reg_name, peripheral_registers[i][11].reg_address,
-                              (uint8_t *) &twtp, sizeof(twtp));
+            log_register_data(peripheral_registers[i][11].reg_name, peripheral_registers[i][11].reg_address, &twtp);
         }
         else
         {
@@ -275,15 +247,13 @@ static bool read_peripherals(npz_device_config_s *device_config)
         // Read and log TCFGP register
         if (npz_read_TCFGP(switches[i], &tcfgp) == OK)
         {
-            log_register_data(peripheral_registers[i][12].reg_name, peripheral_registers[i][12].reg_address,
-                              (uint8_t *) &tcfgp, sizeof(tcfgp));
+            log_register_data(peripheral_registers[i][12].reg_name, peripheral_registers[i][12].reg_address, &tcfgp);
         }
         else
         {
             printf("Failed to read TCFGP register for peripheral %d \r\n", i + 1);
             return false;
         }
-
     }
 
     return true;
@@ -291,7 +261,10 @@ static bool read_peripherals(npz_device_config_s *device_config)
 
 static bool adc_config_read(npz_device_config_s *device_config)
 {
-    if (device_config->adc_channels[0]->wakeup_enable == 1)
+    const npz_adc_config_channels_s *adc_int = device_config->adc_channels[0];
+    const npz_adc_config_channels_s *adc_ext = device_config->adc_channels[1];
+
+    if (adc_int != NULL && adc_int->wakeup_enable == 1)
     {
         printf("----------------------------------------------\r\n");
         printf("          Read internal adc registers         \r\n");
@@ -309,7 +282,7 @@ static bool adc_config_read(npz_device_config_s *device_config)
         }
 
         // Log internal ADC over threshold register
-        log_register_data("THROVA1", REG_THROVA1, (uint8_t *) &throva1, sizeof(throva1));
+        log_register_data("THROVA1", REG_THROVA1, &throva1);
 
         if (npz_read_THRUNA1(&thruna1) != OK)
         {
@@ -318,11 +291,11 @@ static bool adc_config_read(npz_device_config_s *device_config)
         }
 
         // Log internal ADC under threshold register
-        log_register_data("THRUNA1", REG_THRUNA1, (uint8_t *) &thruna1, sizeof(thruna1));
+        log_register_data("THRUNA1", REG_THRUNA1, &thruna1);
         printf("----------------------------------------------\r\n");
     }
 
-    if (device_config->adc_channels[1]->wakeup_enable == 1 && device_config->adc_ext_sampling_enable == 1)
+    if (adc_ext != NULL && adc_ext->wakeup_enable == 1 && device_config->adc_ext_sampling_enable == 1)
     {
         printf("----------------------------------------------\r\n");
         printf("          Read external adc registers          \r\n");
@@ -340,7 +313,7 @@ static bool adc_config_read(npz_device_config_s *device_config)
         }
 
         // Log external ADC over threshold register
-        log_register_data("THROVA2", REG_THROVA2, (uint8_t *) &throva2, sizeof(throva2));
+        log_register_data("THROVA2", REG_THROVA2, &throva2);
 
         if (npz_read_THRUNA2(&thruna2) != OK)
         {
@@ -349,7 +322,7 @@ static bool adc_config_read(npz_device_config_s *device_config)
         }
 
         // Log external ADC under threshold register
-        log_register_data("THRUNA2", REG_THRUNA2, (uint8_t *) &thruna2, sizeof(thruna2));
+        log_register_data("THRUNA2", REG_THRUNA2, &thruna2);
     }
 
     printf("----------------------------------------------\r\n");
@@ -378,7 +351,6 @@ static bool peripheral_config_read(npz_device_config_s *device_config)
     // Validate peripherals
     if (validate_peripherals(device_config))
     {
-        // Configure peripherals
         if (!read_peripherals(device_config))
         {
             printf("Failed to read peripherals\r\n");
@@ -389,17 +361,16 @@ static bool peripheral_config_read(npz_device_config_s *device_config)
     return true;
 }
 
-static bool global_config_read()
+static bool global_config_read(void)
 {
     uint8_t data;        // Buffer to store data read from registers
-    char binary_str[9];  // Buffer to hold binary strings for each register value
     npz_status_e status; // Variable to hold the status of I2C read
 
-    printf("----------------------------------------------\n\r");
-    printf("          Read global registers               \n\r");
-    printf("----------------------------------------------\n\r");
-    printf("[  ADDR |    REGISTER    |     BIN    | HEX  ]\n\r");
-    printf("----------------------------------------------\n\r");
+    printf("----------------------------------------------\r\n");
+    printf("          Read global registers               \r\n");
+    printf("----------------------------------------------\r\n");
+    printf("[  ADDR |    REGISTER    |     BIN    | HEX  ]\r\n");
+    printf("----------------------------------------------\r\n");
 
     // Iterate over the register_info array to read and log each register
     for (size_t i = 0; i < sizeof(global_register_info) / sizeof(global_register_info[0]); i++)
@@ -408,19 +379,14 @@ static bool global_config_read()
         status = npz_read_register(global_register_info[i].reg_address, &data, 1);
         if (status != OK)
         {
-            printf("Failed to read register at address 0x%02X \n\r", global_register_info[i].reg_address);
+            printf("Failed to read register at address 0x%02X \r\n", global_register_info[i].reg_address);
             return false;
         }
 
-        // Convert the register value to a binary string for logging
-        char_to_binary_string(data, binary_str);
-
-
-        printf("[  %02X   | %-14s | %-10s | 0x%02X ] \n\r", global_register_info[i].reg_address,
-                global_register_info[i].reg_name, binary_str, data);
+        log_register_data(global_register_info[i].reg_name, global_register_info[i].reg_address, &data);
     }
 
-    printf("----------------------------------------------");
+    printf("----------------------------------------------\r\n");
 
     return true;
 }
@@ -444,22 +410,16 @@ static bool read_status_registers(void)
     }
 
     // Log the registers
-    printf("----------------------------------------------\n\r");
-    printf("          Read status registers               \n\r");
-    printf("----------------------------------------------\n\r");
-    printf("[  ADDR |    REGISTER    |     BIN    | HEX  ]\n\r");
-    printf("----------------------------------------------\n\r");
+    printf("----------------------------------------------\r\n");
+    printf("          Read status registers               \r\n");
+    printf("----------------------------------------------\r\n");
+    printf("[  ADDR |    REGISTER    |     BIN    | HEX  ]\r\n");
+    printf("----------------------------------------------\r\n");
 
-    // Log STA1 register
-    char binary_str[9];
-    char_to_binary_string(*((uint8_t *) &status1), binary_str); // Use the address to cast
-    printf("[  %02X   | %-14s | %-10s | 0x%02X ]\n\r", REG_STA1, "STA1", binary_str, *((uint8_t *) &status1));
+    log_register_data("STA1", REG_STA1, &status1);
+    log_register_data("STA2", REG_STA2, &status2);
 
-    // Log STA2 register
-    char_to_binary_string(*((uint8_t *) &status2), binary_str); // Use the address to cast
-    printf("[  %02X   | %-14s | %-10s | 0x%02X ]\n\r", REG_STA2, "STA2", binary_str, *((uint8_t *) &status2));
-
-    printf("----------------------------------------------");
+    printf("----------------------------------------------\r\n");
 
     return true;
 }
@@ -471,27 +431,33 @@ static bool read_status_registers(void)
 
 void npz_log_configurations(npz_device_config_s *device_config)
 {
+    if (device_config == NULL)
+    {
+        printf("Invalid device configuration pointer\r\n");
+        return;
+    }
+
     if (!global_config_read())
     {
-        printf("Failed to read configure global settings");
+        printf("Failed to read global settings\r\n");
         return;
     }
 
     if (!read_status_registers())
     {
-		printf("Failed to read status registers \n\r");
-		return;
-	}
+        printf("Failed to read status registers\r\n");
+        return;
+    }
 
     if (!peripheral_config_read(device_config))
     {
-        printf("Failed to read peripherals configuration \n\r");
+        printf("Failed to read peripherals configuration\r\n");
         return;
     }
 
     if (!adc_config_read(device_config))
     {
-        printf("Failed to read ADC configuration \n\r");
+        printf("Failed to read ADC configuration\r\n");
         return;
     }
 }

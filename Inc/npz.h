@@ -9,10 +9,16 @@
  *
  * This driver is designed to work with the nPZero G1S IC from Nanopower Semiconductor.
  * It utilizes the I2C communication protocol for interfacing the host MCU.
+ *
+ * @note Register structures (npz_register_*_s) are overlaid directly on the bytes read from the device.
+ * They therefore use only uint8_t bit-fields so that every single-byte register struct is exactly one byte on
+ * all common compilers (GCC, Clang, ARMCC, IAR), independent of enum size settings such as -fshort-enums.
+ * The sizes are checked at compile time below. The bit-field allocation order is assumed to be LSB first,
+ * which is the case for these compilers on little-endian targets.
  */
 
-#ifndef __NPZ_H
-#define __NPZ_H
+#ifndef NPZ_H
+#define NPZ_H
 
 /** @cond */
 #include <stdbool.h>
@@ -21,6 +27,9 @@
 
 #include "npz_hal.h"
 /** @endcond */
+
+/** Compile-time assertion usable in C99 and later. */
+#define NPZ_STATIC_ASSERT(cond, name) typedef char npz_static_assert_##name[(cond) ? 1 : -1]
 
 /** Enumerations. */
 
@@ -116,11 +125,11 @@ typedef enum
  * oscillator). */
 typedef enum
 {
-    SYS_CLOCK_10HZ = 0x00, /**< 10 Hz. */
-    SYS_CLOCK_32KHZ = 0x01,  /**< 32.578 kHz. */
+    SYS_CLOCK_10HZ = 0x00,  /**< 10 Hz. */
+    SYS_CLOCK_32KHZ = 0x01, /**< 32.768 kHz. */
 } npz_sclk_sel_e;
 
-/** Controls system clock divider. */
+/** Controls system clock divider. Encoded as (SCLK_DIV_SEL << 1) | SCLK_DIV_EN. */
 typedef enum
 {
     SCLK_DIV_DISABLE = 0x00, /**< Disable clock division. */
@@ -130,23 +139,23 @@ typedef enum
     SCLK_DIV_16 = 0x07,      /**< Divided by 16. */
 } npz_sclk_div_e;
 
-/** Controls ADC clock select */
+/** Controls ADC clock select. The XO-derived clocks require system_clock_source = SYS_CLOCK_32KHZ. */
 typedef enum
 {
-    ADC_CLK_SC = 0x00,      /**< System clock. */
-    ADC_CLK_64 = 0x01,      /**< XO clock divided by 512 (64 Hz). */
-    ADC_CLK_256 = 0x02,     /**< XO clock divided by 128 (256 Hz). */
-    ADC_CLK_1024 = 0x03     /**< XO clock divided by 32 (1024 Hz). */
+    ADC_CLK_SC = 0x00,  /**< System clock. */
+    ADC_CLK_64 = 0x01,  /**< XO clock divided by 512 (64 Hz). */
+    ADC_CLK_256 = 0x02, /**< XO clock divided by 128 (256 Hz). */
+    ADC_CLK_1024 = 0x03 /**< XO clock divided by 32 (1024 Hz). */
 } npz_adc_clk_e;
 
-/** Controls IO pull-up strength */
+/** Controls IO output strength */
 typedef enum
 {
-    IO_STR_NORMAL = 0x00,   /**< Normal pull-up strength */
-    IO_STR_HIGH = 0x01,     /**< High pull-up strength */
+    IO_STR_NORMAL = 0x00, /**< Normal output strength */
+    IO_STR_HIGH = 0x01,   /**< High output strength */
 } npz_io_str_e;
 
-/** Controls I2C pull-ups */
+/** Controls I2C pull-ups. Encoded as (I2C_PUP_AUTO << 1) | I2C_PUP_EN. */
 typedef enum
 {
     I2C_PULL_DISABLE = 0x00,   /**< I2C pull-ups disabled */
@@ -157,20 +166,20 @@ typedef enum
 /** Controls the SPI pin mode */
 typedef enum
 {
-    SPI_PINS_ALWAYS_ON = 0x00,   /**< SPI pins always enabled */
-    SPI_PINS_AUTO_DISABLE = 0x01,     /**< SPI pins disabled in idle (hi-Z) */
+    SPI_PINS_ALWAYS_ON = 0x00,    /**< SPI pins always enabled */
+    SPI_PINS_AUTO_DISABLE = 0x01, /**< SPI pins disabled in idle (hi-Z) */
 } npz_spi_auto_e;
 
 /** Controls CLK_OUT DIV clock select */
 typedef enum
 {
-    XO_CLK_OFF = 0x00,   /**< Turned_off. */
-    XO_CLK_32K = 0x01,   /**< Divide by 1 (32 kHz). */
-    XO_CLK_16K = 0x02,   /**< Divide by 2 (16 kHz). */
-    XO_CLK_8K = 0x03,    /**< Divide by 4 (8 kHz). */
-    XO_CLK_4K = 0x04,    /**< Divide by 8 (4 kHz). */
-    XO_CLK_2K = 0x05,    /**< Divide by 16 (2 kHz). */
-    XO_CLK_1K = 0x06     /**< Divide by 32 (1 kHz). */    
+    XO_CLK_OFF = 0x00, /**< Turned off. */
+    XO_CLK_32K = 0x01, /**< Divide by 1 (32 kHz). */
+    XO_CLK_16K = 0x02, /**< Divide by 2 (16 kHz). */
+    XO_CLK_8K = 0x03,  /**< Divide by 4 (8 kHz). */
+    XO_CLK_4K = 0x04,  /**< Divide by 8 (4 kHz). */
+    XO_CLK_2K = 0x05,  /**< Divide by 16 (2 kHz). */
+    XO_CLK_1K = 0x06   /**< Divide by 32 (1 kHz). */
 } npz_xo_clkout_div_e;
 
 typedef enum
@@ -197,31 +206,33 @@ typedef enum
     ENDIAN_BIG = 0x01,    /**< Big endian. */
 } npz_endianess_e;
 
+/** Interrupt pin pull-up configuration. Encoded as (PU_S_INTx << 1) | PU_INTx.
+ * NOTE: LOW/HIGH refer to the pull-up STRENGTH, not to pull-down vs pull-up. Both values enable a pull-up. */
 typedef enum
 {
-    INT_PIN_PULL_DISABLED = 0x00,
-    INT_PIN_PULL_LOW = 0x01,
-    INT_PIN_PULL_HIGH = 0x03,
+    INT_PIN_PULL_DISABLED = 0x00, /**< No pull-up. */
+    INT_PIN_PULL_LOW = 0x01,      /**< Low-strength pull-up enabled. */
+    INT_PIN_PULL_HIGH = 0x03,     /**< High-strength pull-up enabled. */
 } npz_int_pin_pull_e;
 
 typedef enum
 {
-    PRE_WAIT_TIME_DISABLED = 0x00,     /**< Pre-init wait time disable. */
+    PRE_WAIT_TIME_DISABLED = 0x00,    /**< Pre-init wait time disable. */
     PRE_WAIT_TIME_EXTEND_256 = 0x01,  /**< Pre-init wait time x256 clocks. */
     PRE_WAIT_TIME_EXTEND_4096 = 0x03, /**< Pre-init wait time x4096 clocks. */
 } npz_pre_wait_time_e;
 
 typedef enum
 {
-    POST_WAIT_TIME_DISABLED = 0x00,     /**< Post-init wait time disable. */
+    POST_WAIT_TIME_DISABLED = 0x00,    /**< Post-init wait time disable. */
     POST_WAIT_TIME_EXTEND_256 = 0x01,  /**< Post-init wait time x256 clocks. */
     POST_WAIT_TIME_EXTEND_4096 = 0x03, /**< Post-init wait time x4096 clocks. */
 } npz_post_wait_time_e;
 
 typedef enum
 {
-    WAKEUP_ANY = 0x00, /** Wake up system on any trigger. */
-    WAKEUP_ALL = 0x01, /** Wake up system on all triggers. */
+    WAKEUP_ANY = 0x00, /**< Wake up system on any trigger. */
+    WAKEUP_ALL = 0x01, /**< Wake up system on all triggers. */
 } npz_wakeup_e;
 
 /* Structures */
@@ -229,7 +240,7 @@ typedef enum
 /**  Idle/Reset register for shutting down the host MCU or resetting the nPZero device. */
 typedef struct
 {
-    uint8_t value; /**< When set to OxFF, the device will enter idle mode, shutting down the host power and assuming
+    uint8_t value; /**< When set to 0xFF, the device will enter idle mode, shutting down the host power and assuming
                     * control of the I2C bus. When set to 0xA5, the device will soft reset. */
 } npz_register_idle_rst_s;
 
@@ -242,11 +253,11 @@ typedef struct
 /** (Read) Status register for verifying the reset reason and selected wakeup triggers. */
 typedef struct
 {
-    npz_resetsource_e reset_source : 3; /**< Indicates the reason for the device reset, see @npz_resetsource_e. */
-    uint8_t padding : 2;                /**< Not used. */
+    uint8_t reset_source : 3;      /**< Indicates the reason for the device reset, see npz_resetsource_e. */
+    uint8_t padding : 2;           /**< Not used. */
     uint8_t ext_adc_triggered : 1; /**< When flag is set to 1, indicates the external ADC channel (connected to ADC_IN)
                                     * was triggered. */
-    uint8_t int_adc_triggered : 1; /**< When flag is set to 1, indicates the internal ADC cahnnel (connected to VBAT)
+    uint8_t int_adc_triggered : 1; /**< When flag is set to 1, indicates the internal ADC channel (connected to VBAT)
                                     * was triggered. */
     uint8_t global_timeout_triggered : 1; /**< When flag is set to 1, indicates the wake up reason was a
                                            * global timeout before any wake up source was triggered. */
@@ -272,14 +283,14 @@ typedef struct
 /**  Power Control register for power switch configuration for peripherals and Host MCU. */
 typedef struct
 {
-    uint8_t pswint_p1 : 1;               /**< Controls the power switch output state for peripheral 1. */
-    uint8_t pswint_p2 : 1;               /**< Controls the power switch output state for peripheral 2. */
-    uint8_t pswint_p3 : 1;               /**< Controls the power switch output state for peripheral 3. */
-    uint8_t pswint_p4 : 1;               /**< Controls the power switch output state for peripheral 4. */
-    npz_host_power_mode_e pswh_mode : 2; /**< Sets the host power switch mode (SW_HP pin), see npz_host_power_mode_e. */
-    uint8_t psw_en_vn : 1; 				 /**< Enables power switch gate boost for reduced Rds(on). Gate boost automatically
-                                              turns on for VBAT lower than 1.7 V. (0: Normal operation, 1: Switch gate boost) */
-    uint8_t psw_vn_on : 1;               /**< When the flag is set to 1, it indicates that the gate boost is active. */
+    uint8_t pswint_p1 : 1; /**< Controls the power switch output state for peripheral 1. */
+    uint8_t pswint_p2 : 1; /**< Controls the power switch output state for peripheral 2. */
+    uint8_t pswint_p3 : 1; /**< Controls the power switch output state for peripheral 3. */
+    uint8_t pswint_p4 : 1; /**< Controls the power switch output state for peripheral 4. */
+    uint8_t pswh_mode : 2; /**< Sets the host power switch mode (SW_HP pin), see npz_host_power_mode_e. */
+    uint8_t psw_en_vn : 1; /**< Enables power switch gate boost for reduced Rds(on). Gate boost automatically
+                            * turns on for VBAT lower than 1.7 V. (0: Normal operation, 1: Switch gate boost) */
+    uint8_t psw_vn_on : 1; /**< (Read only) When the flag is set to 1, it indicates that the gate boost is active. */
 } npz_register_pswctl_s;
 
 /**  System Config 1 register for clock source and peripheral wake up configuration. */
@@ -299,7 +310,7 @@ typedef struct
                                         * (0: ADC trigger disabled, 1: ADC trigger enabled). */
     uint8_t wake_up_any_or_all : 1;    /**< Controls if any wake up source trigger is sufficient to wake up the system,
                                         * or if all wake up source triggers are necessary to wake up.
-                                        * (0: Wake up system on any trigger, 1: Wake up system on all triggers). */                      
+                                        * (0: Wake up system on any trigger, 1: Wake up system on all triggers). */
     uint8_t padding : 1;               /**< Not used. */
 } npz_register_syscfg1_s;
 
@@ -310,26 +321,27 @@ typedef struct
                                * division, 1: Enable clock division). */
     uint8_t sclk_div_sel : 2; /**< Controls system clock divider. */
     uint8_t sclk_sel : 1; /**< Controls system clock source between internal slow oscillator or crystal oscillator, see
-                           * SCLK_SEL. */
+                           * npz_sclk_sel_e. */
     uint8_t adc_ext_on : 1;  /**< Enables external ADC input sampling (ADC_IN pin). When enabled, the sampling rate for
                               * both ADC channels (VBAT and ADC_IN) is halved. (0: Disable ADC_IN, 1: Enable ADC_IN). */
-    uint8_t adc_clk_sel : 2; /**<Selects ADC sampling frequency, see Table 28 - ADC clock selection.
-                              *For XO-derived clocks, the SCLK_SEL field must be set to 1 */
-    uint8_t padding : 1;               /**< Not used. */
+    uint8_t adc_clk_sel : 2; /**< Selects ADC sampling frequency, see Table 28 - ADC clock selection.
+                              * For XO-derived clocks, the SCLK_SEL field must be set to 1 */
+    uint8_t padding : 1;     /**< Not used. */
 } npz_register_syscfg2_s;
 
 /**  System Config 3 register for I2C/SPI configuration. */
 typedef struct
 {
-    uint8_t io_str : 1;  /**< Controls the I/O pins’ output strength, (0: Normal strength; 1: High strength). */
-    uint8_t i2c_pup_en : 1;  /**< Controls the internal I²C pull-up of ≈40KΩ. (0: Disabled; 1: Enabled). */
-    uint8_t i2c_pup_auto : 1; /**< I²C internal pull-up auto control requires I2C_PUP_EN to be enabled.
-                                *(0: Pull-ups always on; 1: Pull-ups in idle mode disabled). */
-    uint8_t spi_auto : 1; /**< Controls the SPI outputs when the interface is not in use.
-                            *(0: Always on; 1: Auto disable (HiZ)). */
+    uint8_t io_str : 1;       /**< Controls the I/O pins' output strength, (0: Normal strength; 1: High strength). */
+    uint8_t i2c_pup_en : 1;   /**< Controls the internal I2C pull-up of approx. 40 kOhm. (0: Disabled; 1: Enabled). */
+    uint8_t i2c_pup_auto : 1; /**< I2C internal pull-up auto control requires I2C_PUP_EN to be enabled.
+                               * (0: Pull-ups always on; 1: Pull-ups in idle mode disabled). */
+    uint8_t spi_auto : 1;     /**< Controls the SPI outputs when the interface is not in use.
+                               * (0: Always on; 1: Auto disable (HiZ)). */
     uint8_t xo_clkout_div : 3; /**< Enables the crystal oscillator and selects the division on CLK_OUT pin,
-                                 * - CLK_OUT clock selection. */
-    uint8_t sclk_sel_status : 1;  /**< System clock selection status. (0: Low-power oscillator; 1: Crystal oscillator). */
+                                * see npz_xo_clkout_div_e. */
+    uint8_t sclk_sel_status : 1; /**< (Read only) System clock selection status. (0: Low-power oscillator;
+                                  * 1: Crystal oscillator). Not written by npz_write_SYSCFG3(). */
 } npz_register_syscfg3_s;
 
 /**  Time out register for Host MCU wake up. */
@@ -363,34 +375,33 @@ typedef struct
 } npz_register_intcfg_s;
 
 /** Peripheral Config register for Power Mode, Polling Mode, Power Switch Mode and Interrupt Mode configuration. There
- * is 4 cfgp registers, one for each Peripheral. */
+ * are 4 cfgp registers, one for each Peripheral. */
 typedef struct
 {
-    npz_power_mode_e pwmod : 2;          /**< Controls peripheral power mode, see npz_power_mode_e. */
-    npz_polling_mode_e tmod : 2;         /**< Controls peripheral polling mode, see npz_polling_mode_e. */
-    npz_power_switch_mode_e pswmod : 2;  /**< Sets the peripheral power switch mode (pins SW_LP*),
-                                          * see @npz_power_switch_mode_e. */
-    npz_interrupt_pin_mode_e intmod : 2; /**< Sets the peripheral interrupt pin mode (pins INT*), either as an input
-                                          * that can be used during polling, or as a trigger output,
-                                          * see @npz_interrupt_pin_mode_e. */
+    uint8_t pwmod : 2;  /**< Controls peripheral power mode, see npz_power_mode_e. */
+    uint8_t tmod : 2;   /**< Controls peripheral polling mode, see npz_polling_mode_e. */
+    uint8_t pswmod : 2; /**< Sets the peripheral power switch mode (pins SW_LP*), see npz_power_switch_mode_e. */
+    uint8_t intmod : 2; /**< Sets the peripheral interrupt pin mode (pins INT*), either as an input
+                         * that can be used during polling, or as a trigger output,
+                         * see npz_interrupt_pin_mode_e. */
 } npz_register_cfgp_s;
 
 /**  Peripheral Mode register for configuration of the different modes. */
 typedef struct
 {
-    npz_comparison_mode_e cmod : 1; /**< Comparison mode of over/under thresholds.
-                                     * Inside mode triggers when value is higher or equal than over threshold or
-                                     * lower or equal than under threshold. Outside mode triggers when value
-                                     * is lower than over threshold and higher than under threshold.
-                                     * (0: Inside mode; 1: Outside mode). */
-    npz_data_type_e dtype : 2;      /**< Data type of value read From peripheral, see @npz_data_type_e. */
-    uint8_t seqrw : 1; /**< Transmit sequential read and write addresses as multi-byte transfers. (0: Disable multi-byte
-                        * transfers; 1: Enable multi-byte transfers). */
-    uint8_t wunak : 1; /**< Wake up if peripheral does not acknowledge I2C address (NAK). (0: Continue on NAK; 1: Wake
-                        * up on NAK). */
-    uint8_t swprreg : 1;     /**< Swap high/low read registers of peripheral to match endianess of the data. (0: Little
-                              * endian; 1: Big endian). */
-    npz_spimod_e spimod : 2; /**< Sets the SPI mode if SPI communication is enabled, see @npz_spimod_e. */
+    uint8_t cmod : 1;    /**< Comparison mode of over/under thresholds, see npz_comparison_mode_e.
+                          * Inside mode triggers when value is higher or equal than over threshold or
+                          * lower or equal than under threshold. Outside mode triggers when value
+                          * is lower than over threshold and higher than under threshold.
+                          * (0: Inside mode; 1: Outside mode). */
+    uint8_t dtype : 2;   /**< Data type of value read from peripheral, see npz_data_type_e. */
+    uint8_t seqrw : 1;   /**< Transmit sequential read and write addresses as multi-byte transfers. (0: Disable
+                          * multi-byte transfers; 1: Enable multi-byte transfers). */
+    uint8_t wunak : 1;   /**< Wake up if peripheral does not acknowledge I2C address (NAK). (0: Continue on NAK; 1:
+                          * Wake up on NAK). */
+    uint8_t swprreg : 1; /**< Swap high/low read registers of peripheral to match endianess of the data. (0: Little
+                          * endian; 1: Big endian). */
+    uint8_t spimod : 2;  /**< Sets the SPI mode if SPI communication is enabled, see npz_spimod_e. */
 } npz_register_modp_s;
 
 /**  Peripheral Polling register for configuration of the polling period. NOTE: Zero is not a valid value and can result
@@ -408,24 +419,24 @@ typedef struct
 typedef struct
 {
     uint8_t ncmdp : 7;   /**< Number of write commands for peripheral initialization to be read from SRAM.
-                          * 12C mode: number of commands to send, where each command consists of an address byte and a
-                          * value byte.   < SPI mode: number of total bytes to send from the SRAM. */
+                          * I2C mode: number of commands to send, where each command consists of an address byte and a
+                          * value byte. SPI mode: number of total bytes to send from the SRAM. */
     uint8_t padding : 1; /**< Not used. */
 } npz_register_ncmdp_s;
 
-/**  Peripheral Address register for configuration of communication protocol and I2C salve address/SPI bytes for SPI
+/**  Peripheral Address register for configuration of communication protocol and I2C slave address/SPI bytes for SPI
  * read. */
 typedef struct
 {
     uint8_t addrp : 7;  /**< I2C mode: the 7 bit I2C address of the peripheral.
-                         * SPI mode: number of bytes to send from SRAM For SPI read. */
+                         * SPI mode: number of bytes to send from SRAM for SPI read. */
     uint8_t spi_en : 1; /**< Sets which communication protocol should be used with each peripheral.(0: I2C, 1: SPI). */
 } npz_register_addrp_s;
 
 /**  Peripheral Address of I2C register that holds the value to be read. */
 typedef struct
 {
-    uint8_t rregp; /**< Address of IC peripheral register which contains the lower 8 bits of the value to be read.
+    uint8_t rregp; /**< Address of I2C peripheral register which contains the lower 8 bits of the value to be read.
                     * When data type is 16-bit, this register is incremented to retrieve the higher 8 bits. */
 } npz_register_rregp_s;
 
@@ -433,37 +444,37 @@ typedef struct
 typedef struct
 {
     uint8_t throvp_l; /**< Value of the peripheral over threshold, up to 16-bit, should match the data type set in
-                       * npz_register_modp_s (see npz_DTYPE in npz_register_modp_s). */
+                       * npz_register_modp_s (see dtype in npz_register_modp_s). */
     uint8_t throvp_h; /**< Value of the peripheral over threshold, up to 16-bit, should match the data type set in
-                       * npz_register_modp_s (see npz_DTYPE in npz_register_modp_s). */
+                       * npz_register_modp_s (see dtype in npz_register_modp_s). */
 } npz_register_throvp_s;
 
 /**  Peripheral Threshold Under Value. */
 typedef struct
 {
     uint8_t thrunp_l; /**< Value of the peripheral under threshold, up to 16-bit, should match the data type set in
-                       * npz_register_modp_s (see npz_DTYPE in npz_register_modp_s). */
+                       * npz_register_modp_s (see dtype in npz_register_modp_s). */
     uint8_t thrunp_h; /**< Value of the peripheral under threshold, up to 16-bit, should match the data type set in
-                       * npz_register_modp_s (see npz_DTYPE in npz_register_modp_s). */
+                       * npz_register_modp_s (see dtype in npz_register_modp_s). */
 } npz_register_thrunp_s;
 
 /**  Peripheral To Wait Time before reading value. */
 typedef struct
 {
     uint8_t twtp; /**< Period of time to wait before and/or after peripheral initialization until the value is read, or
-                   * until timeout while waiting for an interrupt assertion, < defined in units of 256 or 4096 periods
-                   * of the internal 400 kHz oscillator.The actual time to wait, and when to wait, depends on the value
-                   * of the tcfgp register. */
+                   * until timeout while waiting for an interrupt assertion, defined in units of 256 or 4096 periods
+                   * of the internal 400 kHz oscillator. The actual time to wait, and when to wait, depends on the
+                   * value of the tcfgp register. */
 } npz_register_twtp_s;
 
 /**  Peripheral To Wait Time configuration. */
 typedef struct
 {
-    uint8_t twt_en : 1;   /**< Enable pre-initialization wait time, as defined by TWTP1. */
-    uint8_t twt_ext : 1;  /**< Extends the pre-initialization wait time to be twtp units of 4096 periods of the internal
-                           * 400 kHz oscillator, instead of the default 256. (0: pre-init time x256 clocks, 1: pre-init
-                           * time x4096 clocks). */
-    uint8_t tinit_en : 1; /**< Enable post-initialization wait time, as defined by TWTP1. */
+    uint8_t twt_en : 1;    /**< Enable pre-initialization wait time, as defined by TWTP. */
+    uint8_t twt_ext : 1;   /**< Extends the pre-initialization wait time to be twtp units of 4096 periods of the
+                            * internal 400 kHz oscillator, instead of the default 256. (0: pre-init time x256 clocks,
+                            * 1: pre-init time x4096 clocks). */
+    uint8_t tinit_en : 1;  /**< Enable post-initialization wait time, as defined by TWTP. */
     uint8_t tinit_ext : 1; /**< Extends the post-initialization wait time to be twtp units of 4096 periods of the
                             * internal 400 kHz oscillator, instead of the default 256. (0: post-init time x256 clocks,
                             * 1: post-init time x4096 clocks). */
@@ -472,7 +483,7 @@ typedef struct
     uint8_t padding : 2;   /**< Not used. */
 } npz_register_tcfgp_s;
 
-/**  Internal ADC (VBAT)Threshold Over Value. */
+/**  Internal ADC (VBAT) Threshold Over Value. */
 typedef struct
 {
     uint8_t throva : 5;  /**< Value of the ADC (internal) over threshold, defined as 5-bit unsigned. */
@@ -486,7 +497,7 @@ typedef struct
     uint8_t padding : 3; /**< Not used. */
 } npz_register_throva2_s;
 
-/**  Internal ADC (VBAT)Threshold Under Value. */
+/**  Internal ADC (VBAT) Threshold Under Value. */
 typedef struct
 {
     uint8_t thruna : 5;  /**< Value of the ADC (internal) under threshold, defined as 5-bit unsigned. */
@@ -504,15 +515,15 @@ typedef struct
 typedef struct
 {
     uint8_t valp_l; /**< Last read value from peripheral, either 8-bit or 16-bit, matching the data type set in
-                     * npz_register_modp_s (see npz_DTYPE in npz_register_modp_s). */
+                     * npz_register_modp_s (see dtype in npz_register_modp_s). */
     uint8_t valp_h; /**< Last read value from peripheral, either 8-bit or 16-bit, matching the data type set in
-                     * npz_register_modp_s (see npz_DTYPE in npz_register_modp_s). */
+                     * npz_register_modp_s (see dtype in npz_register_modp_s). */
 } npz_register_valp_s;
 
 /** (Read) Internal ADC (VBAT) Value. */
 typedef struct
 {
-    uint8_t adc_core; /**< Last read value From internal ADC channel (VBAT pin). */
+    uint8_t adc_core; /**< Last read value from internal ADC channel (VBAT pin). */
 } npz_register_adc_core_s;
 
 /** (Read) External ADC (ADC_IN) Value. */
@@ -527,11 +538,32 @@ typedef struct
     uint8_t value[128]; /**< SRAM value. */
 } npz_register_sram_s;
 
+/* Register structs are read directly from the device as raw bytes: check their size at compile time. */
+NPZ_STATIC_ASSERT(sizeof(npz_register_sta1_s) == 1, sta1_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_sta2_s) == 1, sta2_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_pswctl_s) == 1, pswctl_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_syscfg1_s) == 1, syscfg1_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_syscfg2_s) == 1, syscfg2_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_syscfg3_s) == 1, syscfg3_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_intcfg_s) == 1, intcfg_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_cfgp_s) == 1, cfgp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_modp_s) == 1, modp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_ncmdp_s) == 1, ncmdp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_addrp_s) == 1, addrp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_rregp_s) == 1, rregp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_twtp_s) == 1, twtp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_tcfgp_s) == 1, tcfgp_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_throva1_s) == 1, throva1_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_throva2_s) == 1, throva2_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_thruna1_s) == 1, thruna1_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_thruna2_s) == 1, thruna2_size);
+NPZ_STATIC_ASSERT(sizeof(npz_register_sram_s) == 128, sram_size);
+
 /** Device status struct*/
 typedef struct
 {
-	npz_register_sta1_s status1;
-	npz_register_sta2_s status2;
+    npz_register_sta1_s status1;
+    npz_register_sta2_s status2;
 } npz_status_s;
 
 /** User configuration (Global parameters). */
@@ -539,11 +571,14 @@ typedef struct
 /** Struct that holds configuration for ADC channels. */
 typedef struct
 {
-    uint8_t over_threshold;    /**< Value of the ADC over threshold, defined as 5-bit unsigned. */
-    uint8_t under_threshold;   /**< Value of the ADC under threshold, defined as 5-bit unsigned. */
+    uint8_t over_threshold;    /**< Value of the ADC over threshold, defined as 5-bit unsigned (0..31). */
+    uint8_t under_threshold;   /**< Value of the ADC under threshold, defined as 5-bit unsigned (0..31). */
     uint8_t wakeup_enable : 1; /**< Enables wake up on internal ADC channel trigger or external ADC channel trigger.
                                 * (0: ADC trigger disabled, 1: ADC trigger enabled). */
 } npz_adc_config_channels_s;
+
+/** Maximum number of SRAM bytes that can be given per peripheral in the configuration structs. */
+#define NPZ_PERIPHERAL_SRAM_BYTES_MAX 40
 
 /** Struct that holds all registers that can be configured for each peripheral. */
 typedef struct
@@ -561,39 +596,44 @@ typedef struct
                                                   * or as a trigger output. */
 
     /** Peripheral Mode Configuration (MODP). */
-    npz_comparison_mode_e comparison_mode;   /**< Comparison mode for threshold values. */
-    npz_data_type_e sensor_data_type;               /**< Data type of value read From peripheral. */
-    npz_multibyte_e multi_byte_transfer_enable  : 1; /**< Transmit sequential read and write addresses as multi-byte transfers.
-                                              * (0:Disable multi-byte transfers; 1: Enable multi-byte transfers). */
-    npz_endianess_e swap_registers : 1;  /**< Swap high/low read registers of peripheral to match endianess
-                                              * of the data. (0: Little endian; 1: Big endian). */
+    npz_comparison_mode_e comparison_mode;      /**< Comparison mode for threshold values. */
+    npz_data_type_e sensor_data_type;           /**< Data type of value read from peripheral. */
+    uint8_t multi_byte_transfer_enable : 1;     /**< Transmit sequential read and write addresses as multi-byte
+                                                 * transfers, see npz_multibyte_e.
+                                                 * (0: Disable multi-byte transfers; 1: Enable multi-byte transfers). */
+    uint8_t swap_registers : 1;                 /**< Swap high/low read registers of peripheral to match endianess
+                                                 * of the data, see npz_endianess_e. (0: Little endian; 1: Big endian). */
 
     /** Peripheral Polling Configuration (PERP). */
-    uint16_t polling_period; /**< Polling period for peripheral. NOTE: Zero is not a valid value and can result
-                              * in undefined behavior. */
+    uint16_t polling_period; /**< Polling period for peripheral. Only used when power_mode is POWER_MODE_PERIODIC,
+                              * in which case zero is not a valid value. */
 
     union
     {
         struct
         {
-            uint8_t command_num;        /**< Number of write commands for peripheral initialization (NCMDP). */
-            uint8_t sensor_address; /**< The 7-bit I2C address of the peripheral (ADDRP). */
-            uint8_t reg_address_value;  /**< I2C register address of the peripheral that holds the value to be read
-                                         * (RREGP). */
-            uint8_t wake_on_nak : 1;    /**< Wake up on NAK (No Acknowledgment) (MODP).
-                                         * (0: Continue on NAK, 1: Wake up on NAK). */
+            uint8_t command_num;       /**< Number of write commands for peripheral initialization (NCMDP).
+                                        * Each command is 2 bytes, so at most NPZ_PERIPHERAL_SRAM_BYTES_MAX / 2. */
+            uint8_t sensor_address;    /**< The 7-bit I2C address of the peripheral (ADDRP). */
+            uint8_t reg_address_value; /**< I2C register address of the peripheral that holds the value to be read
+                                        * (RREGP). */
+            uint8_t wake_on_nak : 1;   /**< Wake up on NAK (No Acknowledgment) (MODP).
+                                        * (0: Continue on NAK, 1: Wake up on NAK). */
             uint8_t num_of_retries_on_nak : 2; /**< Number of I2C peripheral communication retries in case of NAK.
                                                 * A value of 0 means no retries, the polling is aborted immediately
                                                 * when a NAK is received (TCFGP). */
-            uint8_t bytes_from_sram[40]; /**< bytes to send from the SRAM (NCMDP). */ /*TODO Test*/
+            uint8_t bytes_from_sram[NPZ_PERIPHERAL_SRAM_BYTES_MAX]; /**< Init commands (address, value pairs)
+                                                                     * to store in SRAM (NCMDP). */
         } i2c_cfg;
         struct
         {
-            uint8_t bytes_from_sram_num;          /**< The number of bytes to send from the SRAM for initialization (NCMDP). */
+            uint8_t bytes_from_sram_num;      /**< The number of bytes to send from the SRAM for initialization (NCMDP). */
             uint8_t bytes_from_sram_read_num; /**< The number of bytes to send from SRAM for value read (ADDRP). */
-            uint8_t bytes_from_sram[40];          /**< The bytes to send from SRAM for initialization. */ /*TODO Test*/
-            uint8_t bytes_from_sram_read[40];     /**< The bytes to send from SRAM for value read. */ /*TODO Test*/
-            npz_spimod_e mode;                    /**< Sets the SPI mode if SPI communication is enabled (MODP). */
+            uint8_t bytes_from_sram[NPZ_PERIPHERAL_SRAM_BYTES_MAX];      /**< The bytes to send from SRAM for
+                                                                          * initialization. */
+            uint8_t bytes_from_sram_read[NPZ_PERIPHERAL_SRAM_BYTES_MAX]; /**< The bytes to send from SRAM for
+                                                                          * value read. */
+            npz_spimod_e mode;                /**< Sets the SPI mode if SPI communication is enabled (MODP). */
         } spi_cfg;
     };
 
@@ -606,7 +646,7 @@ typedef struct
     /** Peripheral To Wait Time before reading value (TWTP). */
     uint8_t time_to_wait; /**< Period of time to wait before and/or after peripheral initialization until the value
                            * is read, or until timeout while waiting for an interrupt assertion, defined in units of
-                           * 256 or 4096 periods of the internal 400 kHz oscillator.The actual time to wait, and
+                           * 256 or 4096 periods of the internal 400 kHz oscillator. The actual time to wait, and
                            * when to wait, depends on the value of the tcfgp register. */
 
     /** Peripheral To Wait Time configuration (TCFGP). */
@@ -624,8 +664,9 @@ typedef struct
     uint8_t power_switch_normal_mode_per3 : 1; /**< Controls the power switch output state for peripheral 3. */
     uint8_t power_switch_normal_mode_per4 : 1; /**< Controls the power switch output state for peripheral 4. */
     npz_host_power_mode_e host_power_mode;     /**< Sets the host power switch mode (SW_HP pin). */
-    uint8_t power_switch_gate_boost : 1;       /**< Enables power switch gate boost for reduced Rds(on). Gate boost automatically
-                                                *   turns on for VBAT lower than 1.7 V. (0: Normal operation, 1: Switch gate boost) */
+    uint8_t power_switch_gate_boost : 1;       /**< Enables power switch gate boost for reduced Rds(on). Gate boost
+                                                * automatically turns on for VBAT lower than 1.7 V.
+                                                * (0: Normal operation, 1: Switch gate boost) */
 
     /** System Config 1 (SYSCFG1) for clock source and peripheral wake up configuration. */
     uint8_t wake_up_per1 : 1; /**< Enables peripheral 1 as a wake up source when triggered. (0: Peripheral does not
@@ -636,9 +677,10 @@ typedef struct
                                * wake up system, 1: Peripheral can wake up system). */
     uint8_t wake_up_per4 : 1; /**< Enables peripheral 4 as a wake up source when triggered. (0: Peripheral does not
                                * wake up system, 1: Peripheral can wake up system). */
-    npz_wakeup_e wake_up_any_or_all : 1; /**< (wupmod) Controls if any wake up source trigger is sufficient to wake up
-                                          * the system, or if all wake up source triggers are necessary to wake up.
-                                          * (0: Wake up system on any trigger, 1: Wake up system on all triggers). */
+    uint8_t wake_up_any_or_all : 1; /**< (wupmod) see npz_wakeup_e. Controls if any wake up source trigger is
+                                     * sufficient to wake up the system, or if all wake up source triggers are
+                                     * necessary to wake up. (0: Wake up system on any trigger, 1: Wake up system on
+                                     * all triggers). */
 
     /** System Config 2 (SYSCFG2) for wakeup configuration. */
     npz_sclk_div_e system_clock_divider; /**< Controls system clock divider. */
@@ -646,10 +688,10 @@ typedef struct
                                           * crystal oscillator. */
 
     /** System Config 3 (SYSCFG3) for pin, I2C pullup and clock out configuration. */
-	npz_io_str_e 		io_strength;  	/**< IO pull-up strength configuration */
-	npz_i2c_pull_sel_e 	i2c_pull_mode;	/**< IO pull-up mode */
-	npz_spi_auto_e		spi_auto;		/**< SPI pin configuration */
-    npz_xo_clkout_div_e xo_clock_out_sel;	/**< CLK_OUT pin configuration */
+    npz_io_str_e io_strength;             /**< IO output strength configuration */
+    npz_i2c_pull_sel_e i2c_pull_mode;     /**< I2C pull-up mode */
+    npz_spi_auto_e spi_auto;              /**< SPI pin configuration */
+    npz_xo_clkout_div_e xo_clock_out_sel; /**< CLK_OUT pin configuration */
 
     /** Timeout (TOUT) for Host MCU wake up. */
     uint16_t global_timeout; /**< Global time out (TOUT) for Host MCU wake up.*/
@@ -664,14 +706,15 @@ typedef struct
     npz_int_pin_pull_e interrupt_pin_pull_up_pin4; /**< Interrupt Config for interrupt pull-up resistors and
                                                     * pull-up strength for peripheral 4. */
 
-    /** Peripheral configurations (Disabled if null). */
+    /** Peripheral configurations (Disabled if NULL). */
     npz_peripheral_config_s *peripherals[4];
 
-    /** System Config 2 (SYSCFG2) register for ADC clock configurartion. */
+    /** System Config 2 (SYSCFG2) register for ADC clock configuration. */
     uint8_t adc_ext_sampling_enable : 1; /**< Enables external ADC input sampling (ADC_IN pin).
                                           * (0: Disable ADC_IN, 1: Enable ADC_IN). */
-    npz_adc_clk_e adc_clock_sel;     /**< Controls ADC clock. */
+    npz_adc_clk_e adc_clock_sel;         /**< Controls ADC clock. */
 
+    /** ADC channel configurations: [0] internal (VBAT), [1] external (ADC_IN). Disabled if NULL. */
     npz_adc_config_channels_s *adc_channels[2];
 
 } npz_device_config_s;
@@ -681,7 +724,7 @@ typedef struct
 
 /**
  * @brief Writes the idle_rst struct to the IDLE_RST register.
- * @brief When set to OxFF, the device will enter idle mode, shutting down the host power and assuming control
+ * @brief When set to 0xFF, the device will enter idle mode, shutting down the host power and assuming control
  * of the I2C bus.
  * @brief When set to 0xA5, the device will soft reset.
  *
@@ -692,20 +735,20 @@ typedef struct
 npz_status_e npz_write_IDLE_RST(uint8_t idle_rst_value);
 
 /**
- * @brief Reads the IDLE_RST register and stores it in the npz_register_idle_rst_s struct.
+ * @brief Reads the IDLE_RST register.
  *
  *
  * @param [out] idle_rst_value Pointer to store the read idle value.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if the pointer is NULL)
  */
 npz_status_e npz_read_IDLE_RST(uint8_t *idle_rst_value);
 
 /**
- * @brief Reads the ID register and stores it in the npz_register_id_s struct.
+ * @brief Reads the ID register.
  *
  *
  * @param [out] id Pointer to id where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if the pointer is NULL)
  */
 npz_status_e npz_read_ID(uint8_t *id);
 
@@ -728,7 +771,7 @@ npz_status_e npz_read_STA1(npz_register_sta1_s *sta1);
 npz_status_e npz_read_STA2(npz_register_sta2_s *sta2);
 
 /**
- * @brief Writes the pswctl struct to the PSWCTL register.
+ * @brief Writes the pswctl struct to the PSWCTL register. The read-only psw_vn_on bit is not written.
  *
  *
  * @param [in] pswctl Power switch control register that holds the value to be written.
@@ -776,13 +819,13 @@ npz_status_e npz_write_SYSCFG2(const npz_register_syscfg2_s syscfg2);
  * @brief Reads the SYSCFG2 register and writes it to npz_register_syscfg2_s struct.
  *
  *
- * @param [out] syscfg2 Pointer to System config 2 register where the value will be stored..
+ * @param [out] syscfg2 Pointer to System config 2 register where the value will be stored.
  * @return npz_status_e Status
  */
 npz_status_e npz_read_SYSCFG2(npz_register_syscfg2_s *syscfg2);
 
 /**
- * @brief Writes the syscfg3 struct to the SYSCFG3 register.
+ * @brief Writes the syscfg3 struct to the SYSCFG3 register. The read-only sclk_sel_status bit is not written.
  *
  *
  * @param [in] syscfg3 System config 3 register that holds the value to be written.
@@ -791,10 +834,10 @@ npz_status_e npz_read_SYSCFG2(npz_register_syscfg2_s *syscfg2);
 npz_status_e npz_write_SYSCFG3(const npz_register_syscfg3_s syscfg3);
 
 /**
- * @brief Reads the syscfg3 register and writes it to the npz_register_syscfg3_s struct.
+ * @brief Reads the SYSCFG3 register and writes it to the npz_register_syscfg3_s struct.
  *
  *
- * @param [out] syscfg3 Pointer to System config 3 register where the value will be stored..
+ * @param [out] syscfg3 Pointer to System config 3 register where the value will be stored.
  * @return npz_status_e Status
  */
 npz_status_e npz_read_SYSCFG3(npz_register_syscfg3_s *syscfg3);
@@ -866,13 +909,13 @@ npz_status_e npz_write_THROVA2(const npz_register_throva2_s throva2);
  * @brief Reads the THROVA2 register and writes it to npz_register_throva2_s struct.
  *
  *
- * @param [out] throva2 Pointer to Thershold Over ADC 2 register where the value will be stored.
+ * @param [out] throva2 Pointer to Threshold Over ADC 2 register where the value will be stored.
  * @return npz_status_e Status
  */
 npz_status_e npz_read_THROVA2(npz_register_throva2_s *throva2);
 
 /**
- * @brief Writes the thruna1 struct to the TRHUNA1 register.
+ * @brief Writes the thruna1 struct to the THRUNA1 register.
  *
  *
  * @param [in] thruna1 Threshold Under ADC 1 register that holds the value to be written.
@@ -884,17 +927,16 @@ npz_status_e npz_write_THRUNA1(const npz_register_thruna1_s thruna1);
  * @brief Reads the THRUNA1 register and writes it to npz_register_thruna1_s struct.
  *
  *
- *
  * @param [out] thruna1 Pointer to Threshold Under ADC 1 register where the value will be stored.
  * @return npz_status_e Status
  */
 npz_status_e npz_read_THRUNA1(npz_register_thruna1_s *thruna1);
 
 /**
- * @brief Writes the thruna2 struct to the TRHUNA2 register.
+ * @brief Writes the thruna2 struct to the THRUNA2 register.
  *
  *
- * @param [out] thruna2 Threshold Under ADC 2 register that holds the value to be written.
+ * @param [in] thruna2 Threshold Under ADC 2 register that holds the value to be written.
  * @return npz_status_e Status
  */
 npz_status_e npz_write_THRUNA2(const npz_register_thruna2_s thruna2);
@@ -928,21 +970,36 @@ npz_status_e npz_read_ADC_CORE(npz_register_adc_core_s *adc_core);
 npz_status_e npz_read_ADC_EXT(npz_register_adc_ext_s *adc_ext);
 
 /**
- * @brief Write one byte to one register in SRAM.
+ * @brief Write one byte to one SRAM register.
  *
+ * Implemented as a read-modify-write of the whole 128-byte SRAM (see npz_write_SRAM_block()). When writing several
+ * bytes, use npz_write_SRAM_block() instead: it costs the same I2C traffic as writing a single byte.
  *
- * @param [in] sram_reg Register address in SRAM to write to.
- * @param [in] sram SRAM register that holds the value to be written.
- * @return npz_status_e Status
+ * @param [in] sram_reg SRAM register address to write to (REG_SRAM_START..REG_SRAM_END, 0x80..0xFF).
+ * @param [in] sram Value to be written.
+ * @return npz_status_e Status (INVALID_PARAM if sram_reg is outside SRAM)
  */
 npz_status_e npz_write_SRAM(const uint8_t sram_reg, const uint8_t sram);
 
 /**
- * @brief Reads one SRAM register and writes it to the npz_register_sram_s struct.
+ * @brief Write a block of consecutive bytes to SRAM.
+ *
+ * Reads the current 128-byte SRAM image, replaces bytes [sram_reg, sram_reg + len) with data, and writes the full
+ * image back using the same register write order as the original driver.
+ *
+ * @param [in] sram_reg First SRAM register address to write to (0x80..0xFF).
+ * @param [in] data Bytes to write.
+ * @param [in] len Number of bytes to write. sram_reg + len must not exceed 0x100.
+ * @return npz_status_e Status (INVALID_PARAM on NULL data, len == 0 or out-of-range block)
+ */
+npz_status_e npz_write_SRAM_block(const uint8_t sram_reg, const uint8_t *data, const uint8_t len);
+
+/**
+ * @brief Reads the complete 128-byte SRAM into the npz_register_sram_s struct.
  *
  *
- * @param [in] sram_reg Register address in SRAM to read a byte from.
- * @param [out] sram Pointer to the SRAM register where the value will be stored.
+ * @param [in] sram_reg Must be REG_SRAM_START (0x80). Other values return INVALID_PARAM.
+ * @param [out] sram Pointer to the SRAM struct where the 128 bytes will be stored.
  * @return npz_status_e Status
  */
 npz_status_e npz_read_SRAM(const uint8_t sram_reg, npz_register_sram_s *sram);
@@ -953,7 +1010,7 @@ npz_status_e npz_read_SRAM(const uint8_t sram_reg, npz_register_sram_s *sram);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] cfgp Config Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_CFGP(const npz_psw_e sw, const npz_register_cfgp_s cfgp);
 
@@ -964,7 +1021,7 @@ npz_status_e npz_write_CFGP(const npz_psw_e sw, const npz_register_cfgp_s cfgp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] cfgp Pointer to the Config Peripheral where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_CFGP(const npz_psw_e sw, npz_register_cfgp_s *cfgp);
 
@@ -974,18 +1031,18 @@ npz_status_e npz_read_CFGP(const npz_psw_e sw, npz_register_cfgp_s *cfgp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] modp Mode Peripheral register that holds value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_MODP(const npz_psw_e sw, const npz_register_modp_s modp);
 
 /**
- * @brief Reads the NODP register that is connected to the low power switch and writes it to the npz_register_modp_s
+ * @brief Reads the MODP register that is connected to the low power switch and writes it to the npz_register_modp_s
  * struct.
  *
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] modp Pointer to Mode Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_MODP(const npz_psw_e sw, npz_register_modp_s *modp);
 
@@ -994,8 +1051,8 @@ npz_status_e npz_read_MODP(const npz_psw_e sw, npz_register_modp_s *modp);
  *
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
- * @param [in] perp Polling Period register that holds the value to be written.
- * @return npz_status_e Status
+ * @param [in] perp Polling Period register that holds the value to be written. Zero is rejected.
+ * @return npz_status_e Status (INVALID_PARAM if sw is invalid or the period is zero)
  */
 npz_status_e npz_write_PERP(const npz_psw_e sw, const npz_register_perp_s perp);
 
@@ -1006,7 +1063,7 @@ npz_status_e npz_write_PERP(const npz_psw_e sw, const npz_register_perp_s perp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] perp Pointer to Polling Period register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_PERP(const npz_psw_e sw, npz_register_perp_s *perp);
 
@@ -1016,7 +1073,7 @@ npz_status_e npz_read_PERP(const npz_psw_e sw, npz_register_perp_s *perp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] ncmdp Number Of Commands register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_NCMDP(const npz_psw_e sw, const npz_register_ncmdp_s ncmdp);
 
@@ -1027,7 +1084,7 @@ npz_status_e npz_write_NCMDP(const npz_psw_e sw, const npz_register_ncmdp_s ncmd
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] ncmdp Pointer to Number Of Commands register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_NCMDP(const npz_psw_e sw, npz_register_ncmdp_s *ncmdp);
 
@@ -1037,7 +1094,7 @@ npz_status_e npz_read_NCMDP(const npz_psw_e sw, npz_register_ncmdp_s *ncmdp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] addrp Address Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_ADDRP(const npz_psw_e sw, const npz_register_addrp_s addrp);
 
@@ -1048,7 +1105,7 @@ npz_status_e npz_write_ADDRP(const npz_psw_e sw, const npz_register_addrp_s addr
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] addrp Pointer to Address Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_ADDRP(const npz_psw_e sw, npz_register_addrp_s *addrp);
 
@@ -1058,7 +1115,7 @@ npz_status_e npz_read_ADDRP(const npz_psw_e sw, npz_register_addrp_s *addrp);
  *
  * @param [in] sw Low power switch indicates which peripheral will be written.
  * @param [in] rregp Read Register Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_RREGP(const npz_psw_e sw, const npz_register_rregp_s rregp);
 
@@ -1069,7 +1126,7 @@ npz_status_e npz_write_RREGP(const npz_psw_e sw, const npz_register_rregp_s rreg
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] rregp Pointer to Read Register Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_RREGP(const npz_psw_e sw, npz_register_rregp_s *rregp);
 
@@ -1079,7 +1136,7 @@ npz_status_e npz_read_RREGP(const npz_psw_e sw, npz_register_rregp_s *rregp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] throvp Threshold Over Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_THROVP(const npz_psw_e sw, const npz_register_throvp_s throvp);
 
@@ -1090,7 +1147,7 @@ npz_status_e npz_write_THROVP(const npz_psw_e sw, const npz_register_throvp_s th
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] throvp Pointer to Threshold Over Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_THROVP(const npz_psw_e sw, npz_register_throvp_s *throvp);
 
@@ -1100,7 +1157,7 @@ npz_status_e npz_read_THROVP(const npz_psw_e sw, npz_register_throvp_s *throvp);
  *
  * @param [in] sw The low power switch indicates which peripheral that will be written.
  * @param [in] thrunp Threshold Under Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_THRUNP(const npz_psw_e sw, const npz_register_thrunp_s thrunp);
 
@@ -1111,7 +1168,7 @@ npz_status_e npz_write_THRUNP(const npz_psw_e sw, const npz_register_thrunp_s th
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] thrunp Pointer to Threshold Under Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_THRUNP(const npz_psw_e sw, npz_register_thrunp_s *thrunp);
 
@@ -1121,7 +1178,7 @@ npz_status_e npz_read_THRUNP(const npz_psw_e sw, npz_register_thrunp_s *thrunp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] twtp Time To Wait Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_TWTP(const npz_psw_e sw, const npz_register_twtp_s twtp);
 
@@ -1132,7 +1189,7 @@ npz_status_e npz_write_TWTP(const npz_psw_e sw, const npz_register_twtp_s twtp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] twtp Pointer to Time To Wait Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_TWTP(const npz_psw_e sw, npz_register_twtp_s *twtp);
 
@@ -1142,7 +1199,7 @@ npz_status_e npz_read_TWTP(const npz_psw_e sw, npz_register_twtp_s *twtp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be written.
  * @param [in] tcfgp Time To Wait Config Peripheral register that holds the value to be written.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_write_TCFGP(const npz_psw_e sw, const npz_register_tcfgp_s tcfgp);
 
@@ -1153,7 +1210,7 @@ npz_status_e npz_write_TCFGP(const npz_psw_e sw, const npz_register_tcfgp_s tcfg
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] tcfgp Pointer to Time To Wait Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_TCFGP(const npz_psw_e sw, npz_register_tcfgp_s *tcfgp);
 
@@ -1164,7 +1221,7 @@ npz_status_e npz_read_TCFGP(const npz_psw_e sw, npz_register_tcfgp_s *tcfgp);
  *
  * @param [in] sw The low power switch indicates which peripheral will be read.
  * @param [out] valp Pointer to Value Peripheral register where the value will be stored.
- * @return npz_status_e Status
+ * @return npz_status_e Status (INVALID_PARAM if sw is not PSW_LP1..PSW_LP4)
  */
 npz_status_e npz_read_VALP(const npz_psw_e sw, npz_register_valp_s *valp);
 
@@ -1173,9 +1230,9 @@ npz_status_e npz_read_VALP(const npz_psw_e sw, npz_register_valp_s *valp);
  *
  * @param register_address The address of the register to read from.
  * @param buffer Pointer to the buffer where the read data will be stored.
- * @param size The size of the data to read.
- * @return OK if the read operation is successful, ERR otherwise.
+ * @param size The size of the data to read (1..65535).
+ * @return OK if the read operation is successful, INVALID_PARAM on bad arguments, ERR otherwise.
  */
 npz_status_e npz_read_register(uint8_t register_address, void *buffer, size_t size);
 
-#endif /* __NPZ_H */
+#endif /* NPZ_H */
